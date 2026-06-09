@@ -1,0 +1,594 @@
+[
+  {
+    "id": "1778940800223-39zzn",
+    "created_at": "2026-05-16T14:13:20.223Z",
+    "ticker": "NVDA",
+    "price": 225.08,
+    "pct_change": "-4.54%",
+    "explanation": "NVDA ▼ -4.54% | Price: $225.08 | Macro: SPY: $739.17, VIX: 18.4\nTop stories (last 24h):\n• Benzinga Bulls And Bears: Nvidia, Cisco, Virgin Galactic — And Inflation Fears Rattle Investors\n• Nebius Group, Cisco Systems, Micron Technology And More: 5 Stocks Investors Couldn't Stop Buzzing About This Week\n• Trump Loaded Up On Palantir Shares Months Before Publicly Praising Defense AI Giant On Truth Social, Records Reveal\n• Spy Fears On Air Force One? Trump Team Ordered To Dump Everything Received In China\n• Elizabeth Warren Blasts Trump's Nvidia Trades Worth Millions As 'National Security Disaster' After China Chip Deals",
+    "sources": [
+      {
+        "headline": "Benzinga Bulls And Bears: Nvidia, Cisco, Virgin Galactic — And Inflation Fears Rattle Investors",
+        "url": "https://www.benzinga.com/markets/market-summary/26/05/52622528/benzinga-bulls-and-bears-nvidia-cisco-virgin-galactic-and-inflation-fears-rattle-investors",
+        "source": "benzinga",
+        "published_at": "2026-05-16T12:50:55Z"
+      },
+      {
+        "headline": "Nebius Group, Cisco Systems, Micron Technology And More: 5 Stocks Investors Couldn't Stop Buzzing About This Week",
+        "url": "https://www.benzinga.com/markets/equities/26/05/52622497/nebius-group-cisco-systems-micron-technology-and-more-5-stocks-investors-couldnt-stop-buzzing-about-this-week",
+        "source": "benzinga",
+        "published_at": "2026-05-16T12:32:13Z"
+      },
+      {
+        "headline": "Trump Loaded Up On Palantir Shares Months Before Publicly Praising Defense AI Giant On Truth Social, Records Reveal",
+        "url": "https://www.benzinga.com/markets/tech/26/05/52622219/trump-loaded-up-on-palantir-shares-months-before-publicly-praising-defense-ai-giant-on-truth-social-records-reveal",
+        "source": "benzinga",
+        "published_at": "2026-05-16T08:13:17Z"
+      },
+      {
+        "headline": "Spy Fears On Air Force One? Trump Team Ordered To Dump Everything Received In China",
+        "url": "https://www.benzinga.com/news/politics/26/05/52622008/spy-fears-on-air-force-one-trump-team-ordered-to-dump-everything-received-in-china",
+        "source": "benzinga",
+        "published_at": "2026-05-16T05:13:13Z"
+      },
+      {
+        "headline": "Elizabeth Warren Blasts Trump's Nvidia Trades Worth Millions As 'National Security Disaster' After China Chip Deals",
+        "url": "https://www.benzinga.com/markets/tech/26/05/52621838/elizabeth-warren-blasts-trumps-nvidia-trades-worth-millions-as-national-security-disaster-after-china-chip-deals",
+        "source": "benzinga",
+        "published_at": "2026-05-16T02:54:29Z"
+      },
+      {
+        "headline": "Elliott Investment Management Sells Stake In BILL Holdings; FS KKR Capital; NVIDIA Corporation; Sensata Technologies",
+        "url": "https://www.benzinga.com/quote/ST",
+        "source": "benzinga",
+        "published_at": "2026-05-15T20:58:11Z"
+      },
+      {
+        "headline": "Third Point Decreases Stake In Amazon To 1,940,000 Shares; APi Group To 2,030,000 Shares; Capital One Financial To 140,000 Shares; Carpenter Technology To 310,000 Shares; Claritev To 44,000 Shares; CRH To 1,900,000 Shares; Live Nation Entertainment To 465,000 Shares; MasTec To 320,000 Shares; Norfolk Southern To 100,000 Shares; NVIDIA To 190,000 Shares; SharkNinja To 130,509 Shares; Somnigroup International To 2,270,769 Shares; Telephone and Data Systems To 6,600,000 Shares; Union Pacific To 100,000 Shares",
+        "url": "https://www.benzinga.com/news/26/05/52616876/third-point-decreases-stake-in-amazon-to-1-940-000-shares-api-group-to-2-030-000-shares-capital-one",
+        "source": "benzinga",
+        "published_at": "2026-05-15T20:29:20Z"
+      },
+      {
+        "headline": "NVIDIA Corporation Increases Stake In CoreWeave To 47,213,353 Shares, Maintains Holdings In Intel Corporation (214,776,632 Shares), Nebius Group N.V. (1,190,476 Shares), Nokia Corporation (166,389,351 Shares), Synopsys (4,821,717 Shares), Takes New Stakes In Coherent Corp. (7,788,161 Shares) Generate Biomedicines (833,325 Shares).",
+        "url": "https://www.benzinga.com/news/26/05/52616483/nvidia-corporation-increases-stake-in-coreweave-to-47-213-353-shares-maintains-holdings-in-intel-cor",
+        "source": "benzinga",
+        "published_at": "2026-05-15T20:24:27Z"
+      }
+    ],
+    "ts": "2026-05-16T14:13:20.222Z"
+  },
+  {
+    "id": "1778940849432-m0np6",
+    "created_at": "2026-05-16T14:14:09.432Z",
+    "ticker": "SPY",
+    "price": 737.71,
+    "pct_change": "-1.39%",
+    "explanation": "SPY ▼ -1.39% | Price: $737.71 | Macro: SPY: $739.17, VIX: 18.4\nTop stories (last 24h):\n• 'China Allows Exports for 425 US Beef Plants, Trade Group Says' - Bloomberg\n• 'Israel and Lebanon agree to extend ceasefire by 45 days, US State Dept says' - Reuters\n• U.S. Baker Hughes Oil Rig Count +5 To 415; U.S. Baker Hughes NatGas Rig Count -1 To 128; U.S. Baker Hughes Total Rig Count 551 Vs 548 Prior\n• 'FDA Drug Center Head Tracy Beth Hoeg Expected To Leave Agency' - Reuters Exclusive\n• Federal Reserve Board announces termination of enforcement actions with UBS Group AG, Credit Suisse AG, Credit Suisse Holdings (USA), and Credit Suisse AG, New York Branch",
+    "sources": [
+      {
+        "headline": "'China Allows Exports for 425 US Beef Plants, Trade Group Says' - Bloomberg",
+        "url": "https://www.benzinga.com/news/26/05/52612930/china-allows-exports-for-425-us-beef-plants-trade-group-says-bloomberg",
+        "source": "benzinga",
+        "published_at": "2026-05-15T19:19:07Z"
+      },
+      {
+        "headline": "'Israel and Lebanon agree to extend ceasefire by 45 days, US State Dept says' - Reuters",
+        "url": "https://www.benzinga.com/news/26/05/52611155/israel-and-lebanon-agree-to-extend-ceasefire-by-45-days-us-state-dept-says-reuters",
+        "source": "benzinga",
+        "published_at": "2026-05-15T18:25:11Z"
+      },
+      {
+        "headline": "U.S. Baker Hughes Oil Rig Count +5 To 415; U.S. Baker Hughes NatGas Rig Count -1 To 128; U.S. Baker Hughes Total Rig Count 551 Vs 548 Prior",
+        "url": "https://www.benzinga.com/quote/USO",
+        "source": "benzinga",
+        "published_at": "2026-05-15T17:03:38Z"
+      },
+      {
+        "headline": "'FDA Drug Center Head Tracy Beth Hoeg Expected To Leave Agency' - Reuters Exclusive",
+        "url": "https://www.benzinga.com/news/26/05/52604164/fda-drug-center-head-tracy-beth-hoeg-expected-to-leave-agency-reuters-exclusive",
+        "source": "benzinga",
+        "published_at": "2026-05-15T15:45:03Z"
+      },
+      {
+        "headline": "Federal Reserve Board announces termination of enforcement actions with UBS Group AG, Credit Suisse AG, Credit Suisse Holdings (USA), and Credit Suisse AG, New York Branch",
+        "url": "https://www.benzinga.com/news/26/05/52602769/federal-reserve-board-announces-termination-of-enforcement-actions-with-ubs-group-ag-credit-suisse-a",
+        "source": "benzinga",
+        "published_at": "2026-05-15T15:18:30Z"
+      },
+      {
+        "headline": "Rising Oil And Yields Getting In The Way Of Dual Market Manias",
+        "url": "https://www.benzinga.com/Opinion/26/05/52602404/rising-oil-and-yields-getting-in-the-way-of-dual-stock-market-manias",
+        "source": "benzinga",
+        "published_at": "2026-05-15T15:10:53Z"
+      },
+      {
+        "headline": "China Foreign Minister Wang Yi, On Ties With U.S., Says China, U.S. Agreed To Set Up Boards Of Trade, Investment; Both Sides Agreed To Address Each Other's Concerns Regarding Market Access For Agricultural Products; Agreed To Promote The Expansion Of Two-way Trade Under The Framework Of Reciprocal Tariff Reductions",
+        "url": "https://www.benzinga.com/economics/macro-economic-events/26/05/52601406/china-foreign-minister-wang-yi-on-ties-with-u-s-says-china-u-s-agreed-to-set-up-b",
+        "source": "benzinga",
+        "published_at": "2026-05-15T14:53:49Z"
+      },
+      {
+        "headline": "China Foreign Minister Wang Yi, On Ties With U.S., Says Teams On Two Sides Are Still Working On Details For Outcomes On Trade; Encourages U.S. And Iran To Continue Resolving Their Differences And Disputes Through Talks; Calls For Reopening Strait Of Hormuz As Soon As Possible; On Ukraine, Says China, U.S. Willing To Maintain Communication",
+        "url": "https://www.benzinga.com/economics/macro-economic-events/26/05/52601405/china-foreign-minister-wang-yi-on-ties-with-u-s-says-teams-on-two-sides-are-still",
+        "source": "benzinga",
+        "published_at": "2026-05-15T14:53:47Z"
+      }
+    ],
+    "ts": "2026-05-16T14:14:09.431Z"
+  },
+  {
+    "id": "1778941228503-4e5pm",
+    "created_at": "2026-05-16T14:20:28.503Z",
+    "ticker": "NVDA",
+    "price": 225.08,
+    "pct_change": "-4.54%",
+    "explanation": "NVDA's 4.54% decline reflects profit-taking amid geopolitical uncertainty and insider selling pressure. Multiple hedge funds—Elliott, Third Point, and Appaloosa—reduced stakes this week, signaling reduced conviction despite NVDA's AI dominance. Escalating China policy tensions, highlighted by Warren's criticism of Trump's semiconductor trades and reports of forced divestitures from China deals, create regulatory risk for a chip company dependent on global supply chains. While Tiger Global increased its position and the broader market (SPY near highs, VIX 18.4) remains relatively stable, the combination of insider selling and political headwinds outweighed positive fundamentals. Key risk: any Trump administration announcement on China chip restrictions could further pressure NVDA if export policies tighten substantially.",
+    "sources": [
+      {
+        "headline": "Benzinga Bulls And Bears: Nvidia, Cisco, Virgin Galactic — And Inflation Fears Rattle Investors",
+        "url": "https://www.benzinga.com/markets/market-summary/26/05/52622528/benzinga-bulls-and-bears-nvidia-cisco-virgin-galactic-and-inflation-fears-rattle-investors",
+        "source": "benzinga",
+        "published_at": "2026-05-16T12:50:55Z"
+      },
+      {
+        "headline": "Nebius Group, Cisco Systems, Micron Technology And More: 5 Stocks Investors Couldn't Stop Buzzing About This Week",
+        "url": "https://www.benzinga.com/markets/equities/26/05/52622497/nebius-group-cisco-systems-micron-technology-and-more-5-stocks-investors-couldnt-stop-buzzing-about-this-week",
+        "source": "benzinga",
+        "published_at": "2026-05-16T12:32:13Z"
+      },
+      {
+        "headline": "Trump Loaded Up On Palantir Shares Months Before Publicly Praising Defense AI Giant On Truth Social, Records Reveal",
+        "url": "https://www.benzinga.com/markets/tech/26/05/52622219/trump-loaded-up-on-palantir-shares-months-before-publicly-praising-defense-ai-giant-on-truth-social-records-reveal",
+        "source": "benzinga",
+        "published_at": "2026-05-16T08:13:17Z"
+      },
+      {
+        "headline": "Spy Fears On Air Force One? Trump Team Ordered To Dump Everything Received In China",
+        "url": "https://www.benzinga.com/news/politics/26/05/52622008/spy-fears-on-air-force-one-trump-team-ordered-to-dump-everything-received-in-china",
+        "source": "benzinga",
+        "published_at": "2026-05-16T05:13:13Z"
+      },
+      {
+        "headline": "Elizabeth Warren Blasts Trump's Nvidia Trades Worth Millions As 'National Security Disaster' After China Chip Deals",
+        "url": "https://www.benzinga.com/markets/tech/26/05/52621838/elizabeth-warren-blasts-trumps-nvidia-trades-worth-millions-as-national-security-disaster-after-china-chip-deals",
+        "source": "benzinga",
+        "published_at": "2026-05-16T02:54:29Z"
+      },
+      {
+        "headline": "Elliott Investment Management Sells Stake In BILL Holdings; FS KKR Capital; NVIDIA Corporation; Sensata Technologies",
+        "url": "https://www.benzinga.com/quote/ST",
+        "source": "benzinga",
+        "published_at": "2026-05-15T20:58:11Z"
+      },
+      {
+        "headline": "Third Point Decreases Stake In Amazon To 1,940,000 Shares; APi Group To 2,030,000 Shares; Capital One Financial To 140,000 Shares; Carpenter Technology To 310,000 Shares; Claritev To 44,000 Shares; CRH To 1,900,000 Shares; Live Nation Entertainment To 465,000 Shares; MasTec To 320,000 Shares; Norfolk Southern To 100,000 Shares; NVIDIA To 190,000 Shares; SharkNinja To 130,509 Shares; Somnigroup International To 2,270,769 Shares; Telephone and Data Systems To 6,600,000 Shares; Union Pacific To 100,000 Shares",
+        "url": "https://www.benzinga.com/news/26/05/52616876/third-point-decreases-stake-in-amazon-to-1-940-000-shares-api-group-to-2-030-000-shares-capital-one",
+        "source": "benzinga",
+        "published_at": "2026-05-15T20:29:20Z"
+      },
+      {
+        "headline": "NVIDIA Corporation Increases Stake In CoreWeave To 47,213,353 Shares, Maintains Holdings In Intel Corporation (214,776,632 Shares), Nebius Group N.V. (1,190,476 Shares), Nokia Corporation (166,389,351 Shares), Synopsys (4,821,717 Shares), Takes New Stakes In Coherent Corp. (7,788,161 Shares) Generate Biomedicines (833,325 Shares).",
+        "url": "https://www.benzinga.com/news/26/05/52616483/nvidia-corporation-increases-stake-in-coreweave-to-47-213-353-shares-maintains-holdings-in-intel-cor",
+        "source": "benzinga",
+        "published_at": "2026-05-15T20:24:27Z"
+      }
+    ],
+    "ts": "2026-05-16T14:20:28.494Z"
+  },
+  {
+    "id": "1778945405462-geyxr",
+    "created_at": "2026-05-16T15:30:05.462Z",
+    "ticker": "AAPL",
+    "price": 300,
+    "pct_change": "0.59%",
+    "explanation": "Apple's modest 0.59% gain reflects broad market strength (SPY +0.59%, VIX 18.4) amid a mixed macro backdrop. The rally is driven primarily by positive sentiment around defense tech—Trump's Palantir endorsement and aggressive China policy positioning favor semiconductor and defense plays over consumer tech. However, Apple benefited from spillover buying and its historical resilience narrative (\"$1000 invested 15 years ago\"). The recent Trump-Xi summit sentiment initially tanked chip stocks but appears partially reversed, supporting moderate tech strength. Apple's stable gain suggests investors view it as a safer semiconductor-adjacent bet compared to NVIDIA's volatility. Key risk: escalating US-China trade tensions or tariffs could rapidly reverse Apple's China exposure advantage, given ~20% of revenues derive from greater China.",
+    "sources": [
+      {
+        "headline": "Trump Loaded Up On Palantir Shares Months Before Publicly Praising Defense AI Giant On Truth Social, Records Reveal",
+        "url": "https://www.benzinga.com/markets/tech/26/05/52622219/trump-loaded-up-on-palantir-shares-months-before-publicly-praising-defense-ai-giant-on-truth-social-records-reveal",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Spy Fears On Air Force One? Trump Team Ordered To Dump Everything Received In China",
+        "url": "https://www.benzinga.com/news/politics/26/05/52622008/spy-fears-on-air-force-one-trump-team-ordered-to-dump-everything-received-in-china",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "$1000 Invested In Apple 15 Years Ago Would Be Worth This Much Today",
+        "url": "https://www.benzinga.com/insights/news/26/05/52619691/1000-invested-in-apple-15-years-ago-would-be-worth-this-much-today",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Trump Says US Doesn't Need A War '9,500 Miles Away,' But Do Prediction Markets Trust His Taiwan Policy?",
+        "url": "https://www.benzinga.com/markets/prediction-markets/26/05/52609034/trump-says-us-doesnt-need-a-war-9500-miles-away-but-do-prediction-markets-trust-his-taiwan-policy",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Nvidia Stock Tops Robinhood's Most Traded List For First Four Months Of 2026: Here's The Top 10",
+        "url": "https://www.benzinga.com/trading-ideas/long-ideas/26/05/52606517/nvidia-stock-tops-robinhoods-most-traded-list-for-first-four-months-of-2026-heres-the-top-10",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "The Great Chip Letdown: Why The Trump-Xi Summit Just Tanked NVIDIA And Intel",
+        "url": "https://www.benzinga.com/markets/tech/26/05/52603560/the-great-chip-letdown-why-the-trump-xi-summit-just-tanked-nvidia-and-intel",
+        "source": "benzinga",
+        "sentiment": null
+      }
+    ],
+    "sentiment_score": null,
+    "sentiment_label": null,
+    "ts": "2026-05-16T15:30:05.461Z"
+  },
+  {
+    "id": "1779120570540-q4ugk",
+    "created_at": "2026-05-18T16:09:30.540Z",
+    "ticker": "AAPL",
+    "price": 296.115,
+    "pct_change": "-1.36%",
+    "explanation": "Apple's 1.36% decline reflects a combination of sector headwinds and company-specific regulatory pressure. The S&P 500's vertical momentum surge (cited by Benzinga) historically precedes pullbacks, creating broad market caution that pressured mega-cap tech. More directly, Apple faces intensifying antitrust scrutiny following an Indian court order demanding \"full cooperation\" in an iPhone App Store probe—a regulatory overhang that persists across multiple jurisdictions. Despite neutral sentiment overall (0.037 score) and some bullish signals from institutional buying (Ticano Wealth's $3.87M investment, option income ETF distributions), the regulatory narrative and broader equity momentum reversal concerns outweighed support. The VIX holding at 18.6 suggests measured volatility rather than panic selling.\n\nKey risk: Escalating antitrust enforcement across India, EU, and US could materially pressure Apple's Services margin—its highest-margin business segment.",
+    "sources": [
+      {
+        "headline": "S&P 500 Momentum Just Went Vertical: The Last 4 Times It Did, Stocks Sold Off",
+        "url": "https://www.benzinga.com/markets/equities/26/05/52631836/sp500-momentum-rally-historical-analysis-goldman-sachs-2026",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Trump Regrets Not Asking For A Bigger Intel Stake",
+        "url": "https://www.benzinga.com/markets/tech/26/05/52631367/trump-regrets-not-asking-for-a-bigger-intel-stake",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Apple Ordered By Indian Court To 'Fully Cooperate' In iPhone App Store Antitrust Probe",
+        "url": "https://www.benzinga.com/markets/tech/26/05/52627323/apple-ordered-by-indian-court-to-fully-cooperate-in-iphone-app-store-antitrust-probe",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "18th May – Threat Intelligence Report",
+        "url": "https://research.checkpoint.com/2026/18th-may-threat-intelligence-report/",
+        "source": "Check Point Research",
+        "sentiment": "Somewhat-Bearish"
+      },
+      {
+        "headline": "Qualcomm Inc Stock (QCOM) Opened Up by 3.13% on May 18: What Investors Need To Know",
+        "url": "https://www.tradingkey.com/news/market-movers/261906148-market-movers-qcom-20260518",
+        "source": "TradingKey",
+        "sentiment": "Neutral"
+      },
+      {
+        "headline": "Corning Inc (Derivatives) price today, GLW to USD live price, marketcap and chart",
+        "url": "https://coinmarketcap.com/currencies/corning-inc-derivatives/",
+        "source": "CoinMarketCap",
+        "sentiment": "Neutral"
+      },
+      {
+        "headline": "Ticino Wealth Makes New $3.87 Million Investment in Apple Inc. $AAPL",
+        "url": "https://www.marketbeat.com/instant-alerts/filing-ticino-wealth-makes-new-387-million-investment-in-apple-inc-aapl-2026-05-18/",
+        "source": "MarketBeat",
+        "sentiment": "Bullish"
+      },
+      {
+        "headline": "SPGM vs. SCHE ETF Comparison: Costs, Returns, and Risks as of May 2026 - News and Statistics",
+        "url": "https://www.indexbox.io/blog/spgm-vs-sche-global-vs-emerging-markets-etf-comparison/",
+        "source": "IndexBox",
+        "sentiment": "Neutral"
+      }
+    ],
+    "sentiment_score": "0.037",
+    "sentiment_label": "Neutral",
+    "ts": "2026-05-18T16:09:30.540Z"
+  },
+  {
+    "id": "1780009486283-0p4pj",
+    "created_at": "2026-05-28T23:04:46.283Z",
+    "ticker": "NVDA",
+    "price": 214.14,
+    "pct_change": "0.74%",
+    "explanation": "NVDA's modest 0.74% gain reflects balanced positive sentiment despite mixed market dynamics. The stock benefited from strong AI infrastructure tailwinds: Boost Run's $471.7M GPU rental deal and Microsoft's $3.6B NVIDIA chip borrowing signal sustained enterprise demand, while the Cadence-Samsung 2nm partnership expansion reinforces NVIDIA's architectural centrality to next-gen AI chips. However, broader market headwinds—geopolitical tensions between the US and Iran and rotation concerns highlighted by JPMorgan's call to look \"beyond NVIDIA and Microsoft to software underdogs\"—capped upside despite bullish AI sentiment (0.289 score) and record S&P highs. The S&P 500's continued strength and low VIX (15.7) provided stability.\n\n**Key risk:** Sustained geopolitical escalation or accelerating capital reallocation away from mega-cap AI plays toward cheaper software alternatives could pressure valuations.",
+    "sources": [
+      {
+        "headline": "Boost Run Signs 36-Month NVIDIA B300 GPU Server Rental Agreement With Thinking Machines Lab For 5,000 GPUs Across Data Center Infrastructure; Combined Total Contract Value ~$471.7M",
+        "url": "https://www.benzinga.com/news/26/05/52861339/boost-run-signs-36-month-nvidia-b300-gpu-server-rental-agreement-with-thinking-machines-lab-for-5-00",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Triple Manias Take A Hit As US And Iran Exchange Strikes But Cooler PCE May Reignite Momentum",
+        "url": "https://www.benzinga.com/Opinion/26/05/52853789/triple-manias-take-a-hit-as-us-and-iran-exchange-strikes-but-cooler-pce-may-reignite-momentum",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Trump Says He 'Saved' Crypto, But Did Bitcoin, Ethereum, XRP Actually Benefit?",
+        "url": "https://www.benzinga.com/crypto/cryptocurrency/26/05/52849101/trump-says-he-saved-crypto-but-did-bitcoin-ethereum-xrp-actually-benefit",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Cadence And Samsung Foundry Expand Multi-Year 2nm AI Chip Partnership With NVIDIA NVLink-C2C IP And GPU-Accelerated Design Flows",
+        "url": "https://www.benzinga.com/news/26/05/52849059/cadence-and-samsung-foundry-expand-multi-year-2nm-ai-chip-partnership-with-nvidia-nvlink-c2c-ip-and",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "S&P 500 Hits Record Highs, Snowflake Jumps 37% On AI Boom: Stock Market Today",
+        "url": "https://www.benzinga.com/markets/equities/26/05/52848870/sp-500-nasdaq-records-us-iran-truce-snowflake-surge-markets-thursday",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Super Micro Jumps 10% As It Cracks Down On Smuggling With New Taiwan Alliance",
+        "url": "https://www.benzinga.com/markets/tech/26/05/52848628/super-micro-jumps-10-as-it-cracks-down-on-smuggling-with-new-taiwan-alliance",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "'Microsoft Partner IREN Borrows $3.6 Billion For NVIDIA Chips' - Bloomberg News",
+        "url": "https://www.benzinga.com/news/26/05/52848398/microsoft-partner-iren-borrows-3-6-billion-for-nvidia-chips-bloomberg-news",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "JPMorgan's AI Call Shifts ETF Focus Beyond Nvidia And Microsoft To Software Underdogs",
+        "url": "https://www.benzinga.com/etfs/sector-etfs/26/05/52845583/chip-etf-beyond-nvidia-microsoft",
+        "source": "benzinga",
+        "sentiment": null
+      }
+    ],
+    "sentiment_score": "0.289",
+    "sentiment_label": "Bullish",
+    "ts": "2026-05-28T23:04:46.280Z"
+  },
+  {
+    "id": "1780009900409-yrnls",
+    "created_at": "2026-05-28T23:11:40.410Z",
+    "ticker": "TSLA",
+    "price": 441.8,
+    "pct_change": "0.31%",
+    "explanation": "Tesla's flat performance (+0.31%) reflects competing forces in a broadly stable market (VIX 15.7, SPY resilient). Neutral sentiment (0.022) and mixed news weigh against bullish catalysts—Cboe's SEC-approved extended trading hours for options could unlock new liquidity, while SpaceX IPO developments and the theoretical Bitcoin holdings from a potential merger generate speculative interest. However, headwinds dominate: China's EV slowdown concerns (Nio CEO alarm, XPeng margin pressures, Li Auto weakness) directly threaten Tesla's growth narrative, and geopolitical tensions (US-Iran strikes) temper broader risk appetite despite cooler PCE inflation potentially supporting equities. The Manitoba EV rebate lawsuit adds regulatory friction. Tesla remains caught between macro recovery hopes and sector-specific challenges in its critical Chinese market.\n\nKey risk: A sharper-than-expected slowdown in China EV demand could trigger reassessment of Tesla's valuation despite strong US delivery guidance.",
+    "sources": [
+      {
+        "headline": "Triple Manias Take A Hit As US And Iran Exchange Strikes But Cooler PCE May Reignite Momentum",
+        "url": "https://www.benzinga.com/Opinion/26/05/52853789/triple-manias-take-a-hit-as-us-and-iran-exchange-strikes-but-cooler-pce-may-reignite-momentum",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Li Auto Stock Sinks To 52-Week Low - Here's Why",
+        "url": "https://www.benzinga.com/markets/earnings/26/05/52840045/li-auto-stock-sinks-to-52-week-low-heres-why",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "How Elon Musk Is Attempting The (Almost) Impossible With The SpaceX IPO",
+        "url": "https://www.benzinga.com/markets/prediction-markets/26/05/52838920/how-elon-musk-is-attempting-the-almost-impossible-with-the-spacex-ipo",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "XPeng Warns Memory Chip Costs, Battery Inflation Are Pressuring Margins",
+        "url": "https://www.benzinga.com/markets/earnings/26/05/52837485/xpeng-warns-memory-chip-costs-battery-inflation-are-pressuring-margins",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Trump Ally Laura Loomer Questions Nvidia CEO Jensen Huang's Chinese University Ties, Writes To Pentagon, Says It's A 'Massive Scandal'",
+        "url": "https://www.benzinga.com/news/politics/26/05/52837271/trump-ally-laura-loomer-questions-nvidia-ceo-jensen-huangs-chinese-university-ties-writes-to-pentagon-says-its-a-massive-scandal",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Tesla Rival Figure Lands Deal With JCPenney Parent After Viral Package Sorting Marathon, White House Visit",
+        "url": "https://www.benzinga.com/markets/tech/26/05/52835666/tesla-rival-figure-lands-deal-with-jcpenney-parent-after-viral-package-sorting-marathon-white-house-visit",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Is China's EV Boom Losing Steam? Tesla Rival Nio's CEO Sounds The Alarm",
+        "url": "https://www.benzinga.com/markets/tech/26/05/52834435/is-chinas-ev-boom-losing-steam-tesla-rival-nios-ceo-sounds-the-alarm",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Trump Accounts App Hits Apple And Google Stores Thursday, Says Scott Bessent: 'Most Important Benefit Since...'",
+        "url": "https://www.benzinga.com/news/financing/26/05/52832073/trump-accounts-app-hits-apple-and-google-stores-thursday-says-scott-bessent-most-important-benefit-since",
+        "source": "benzinga",
+        "sentiment": null
+      }
+    ],
+    "sentiment_score": "0.022",
+    "sentiment_label": "Neutral",
+    "ts": "2026-05-28T23:11:40.409Z"
+  },
+  {
+    "id": "1780009914340-zizw5",
+    "created_at": "2026-05-28T23:11:54.340Z",
+    "ticker": "TSLA",
+    "price": 441.8,
+    "pct_change": "0.31%",
+    "explanation": "Tesla's flat performance reflects competing narratives within a risk-on environment (SPY near highs, VIX 15.7). While neutral sentiment (0.022) and modest positive momentum from extended Cboe options trading hours provided minor support, concerns about China's EV market slowdown—evidenced by Nio CEO warnings and XPeng's margin pressure from input costs—weighed on the stock. These headwinds offset potential enthusiasm around Elon Musk's SpaceX IPO plans and the broader \"mania\" recovery following cooler PCE data. The lack of significant Tesla-specific catalysts left the stock drifting sideways with the broader market.\n\nKey risk: Accelerating EV price competition and margin compression in China could pressure Tesla's profitability if the EV boom indeed loses steam as competitors suggest.",
+    "sources": [
+      {
+        "headline": "Triple Manias Take A Hit As US And Iran Exchange Strikes But Cooler PCE May Reignite Momentum",
+        "url": "https://www.benzinga.com/Opinion/26/05/52853789/triple-manias-take-a-hit-as-us-and-iran-exchange-strikes-but-cooler-pce-may-reignite-momentum",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Li Auto Stock Sinks To 52-Week Low - Here's Why",
+        "url": "https://www.benzinga.com/markets/earnings/26/05/52840045/li-auto-stock-sinks-to-52-week-low-heres-why",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "How Elon Musk Is Attempting The (Almost) Impossible With The SpaceX IPO",
+        "url": "https://www.benzinga.com/markets/prediction-markets/26/05/52838920/how-elon-musk-is-attempting-the-almost-impossible-with-the-spacex-ipo",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "XPeng Warns Memory Chip Costs, Battery Inflation Are Pressuring Margins",
+        "url": "https://www.benzinga.com/markets/earnings/26/05/52837485/xpeng-warns-memory-chip-costs-battery-inflation-are-pressuring-margins",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Trump Ally Laura Loomer Questions Nvidia CEO Jensen Huang's Chinese University Ties, Writes To Pentagon, Says It's A 'Massive Scandal'",
+        "url": "https://www.benzinga.com/news/politics/26/05/52837271/trump-ally-laura-loomer-questions-nvidia-ceo-jensen-huangs-chinese-university-ties-writes-to-pentagon-says-its-a-massive-scandal",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Tesla Rival Figure Lands Deal With JCPenney Parent After Viral Package Sorting Marathon, White House Visit",
+        "url": "https://www.benzinga.com/markets/tech/26/05/52835666/tesla-rival-figure-lands-deal-with-jcpenney-parent-after-viral-package-sorting-marathon-white-house-visit",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Is China's EV Boom Losing Steam? Tesla Rival Nio's CEO Sounds The Alarm",
+        "url": "https://www.benzinga.com/markets/tech/26/05/52834435/is-chinas-ev-boom-losing-steam-tesla-rival-nios-ceo-sounds-the-alarm",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Trump Accounts App Hits Apple And Google Stores Thursday, Says Scott Bessent: 'Most Important Benefit Since...'",
+        "url": "https://www.benzinga.com/news/financing/26/05/52832073/trump-accounts-app-hits-apple-and-google-stores-thursday-says-scott-bessent-most-important-benefit-since",
+        "source": "benzinga",
+        "sentiment": null
+      }
+    ],
+    "sentiment_score": "0.022",
+    "sentiment_label": "Neutral",
+    "ts": "2026-05-28T23:11:54.340Z"
+  },
+  {
+    "id": "1780009915934-isnp0",
+    "created_at": "2026-05-28T23:11:55.934Z",
+    "ticker": "AAPL",
+    "price": 312.33,
+    "pct_change": "0.45%",
+    "explanation": "Apple's modest 0.45% gain reflects mixed sentiment around AI momentum and geopolitical risks. The bullish 0.159 sentiment score is anchored by \"Apple Intelligence Drives Up iPhone & Mac Sales\" reports and the company's renewed focus on on-device AI rather than cloud-dependent solutions, positioning it favorably in the competitive AI landscape. However, gains are capped by broader market caution as \"Triple Manias Take A Hit\" following US-Iran military escalation, which typically pressures equities despite cooler PCE data suggesting potential rate relief ahead. The extended Cboe trading hours approval provides marginal technical support but doesn't drive directional conviction. Apple's modest performance also reflects analyst warnings that the \"Wall Street Rally Rests on a Very Narrow Subset of Stocks\"—suggesting the AI narrative may be running ahead of fundamentals.\n\nKey risk: Geopolitical escalation between US and Iran could rapidly reprices risk assets lower, offsetting near-term AI optimism.",
+    "sources": [
+      {
+        "headline": "Triple Manias Take A Hit As US And Iran Exchange Strikes But Cooler PCE May Reignite Momentum",
+        "url": "https://www.benzinga.com/Opinion/26/05/52853789/triple-manias-take-a-hit-as-us-and-iran-exchange-strikes-but-cooler-pce-may-reignite-momentum",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "'Apple to Renew Push for AI That Runs on Devices, Instead of the Cloud'- The Information",
+        "url": "https://www.benzinga.com/news/26/05/52837704/apple-to-renew-push-for-ai-that-runs-on-devices-instead-of-the-cloud-the-information",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Trump Ally Laura Loomer Questions Nvidia CEO Jensen Huang's Chinese University Ties, Writes To Pentagon, Says It's A 'Massive Scandal'",
+        "url": "https://www.benzinga.com/news/politics/26/05/52837271/trump-ally-laura-loomer-questions-nvidia-ceo-jensen-huangs-chinese-university-ties-writes-to-pentagon-says-its-a-massive-scandal",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "What's Going On With Taiwan Semiconductor Stock Thursday?",
+        "url": "https://www.benzinga.com/markets/tech/26/05/52835387/whats-going-on-with-taiwan-semiconductor-stock-thursday-3",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Financial Times Reported Nvidia CEO Jensen Huang To Join Advisory Board At Beijing University",
+        "url": "https://www.benzinga.com/news/26/05/52833283/financial-times-reported-nvidia-ceo-jensen-huang-to-join-advisory-board-at-beijing-university",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Wall Street Rally Rests On 'Very Narrow Subset Of Stocks,' Analyst Warns— Is AI Driving A Melt-Up?",
+        "url": "https://www.benzinga.com/analyst-stock-ratings/analyst-color/26/05/52832773/wall-street-rally-rests-on-very-narrow-subset-of-stocks-analyst-warns-is-ai-driving-a-melt-up",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Jensen Huang Joins Elite Tsinghua University Advisory Board That Includes Tim Cook And Elon Musk: Report",
+        "url": "https://www.benzinga.com/markets/tech/26/05/52828982/jensen-huang-tsinghua-university-advisory-board-tim-cook-elon-musk",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Cboe gets SEC green light to trade single-stock options before and after the bell",
+        "url": "https://www.investmentnews.com/equities/cboe-gets-sec-green-light-to-trade-single-stock-options-before-and-after-the-bell/266793",
+        "source": "InvestmentNews",
+        "sentiment": "Somewhat-Bullish"
+      }
+    ],
+    "sentiment_score": "0.159",
+    "sentiment_label": "Bullish",
+    "ts": "2026-05-28T23:11:55.933Z"
+  },
+  {
+    "id": "1780009917342-i1lbq",
+    "created_at": "2026-05-28T23:11:57.342Z",
+    "ticker": "NVDA",
+    "price": 214.14,
+    "pct_change": "0.74%",
+    "explanation": "NVDA's modest 0.74% gain reflects a mixed macro backdrop despite strong AI tailwinds. The stock benefited from concrete GPU demand signals—Boost Run's $471.7M, 36-month B300 agreement and Microsoft partner IREN's $3.6B NVIDIA chip financing underscore sustained enterprise AI infrastructure spending. The Cadence-Samsung-NVIDIA NVLink partnership and broader S&P 500 record highs (SPY at $754.60) provided additional support. However, geopolitical escalation (US-Iran strikes) and JPMorgan's recent pivot recommending software alternatives to Nvidia/Microsoft limited upside enthusiasm. With bullish sentiment (0.289) and low VIX (15.7), buyers remain engaged but cautious. Key risk: potential demand normalization if AI capex cycles compress or if cooler PCE inflation data forces rate-cut expectations to unwind.",
+    "sources": [
+      {
+        "headline": "Boost Run Signs 36-Month NVIDIA B300 GPU Server Rental Agreement With Thinking Machines Lab For 5,000 GPUs Across Data Center Infrastructure; Combined Total Contract Value ~$471.7M",
+        "url": "https://www.benzinga.com/news/26/05/52861339/boost-run-signs-36-month-nvidia-b300-gpu-server-rental-agreement-with-thinking-machines-lab-for-5-00",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Triple Manias Take A Hit As US And Iran Exchange Strikes But Cooler PCE May Reignite Momentum",
+        "url": "https://www.benzinga.com/Opinion/26/05/52853789/triple-manias-take-a-hit-as-us-and-iran-exchange-strikes-but-cooler-pce-may-reignite-momentum",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Trump Says He 'Saved' Crypto, But Did Bitcoin, Ethereum, XRP Actually Benefit?",
+        "url": "https://www.benzinga.com/crypto/cryptocurrency/26/05/52849101/trump-says-he-saved-crypto-but-did-bitcoin-ethereum-xrp-actually-benefit",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Cadence And Samsung Foundry Expand Multi-Year 2nm AI Chip Partnership With NVIDIA NVLink-C2C IP And GPU-Accelerated Design Flows",
+        "url": "https://www.benzinga.com/news/26/05/52849059/cadence-and-samsung-foundry-expand-multi-year-2nm-ai-chip-partnership-with-nvidia-nvlink-c2c-ip-and",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "S&P 500 Hits Record Highs, Snowflake Jumps 37% On AI Boom: Stock Market Today",
+        "url": "https://www.benzinga.com/markets/equities/26/05/52848870/sp-500-nasdaq-records-us-iran-truce-snowflake-surge-markets-thursday",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "Super Micro Jumps 10% As It Cracks Down On Smuggling With New Taiwan Alliance",
+        "url": "https://www.benzinga.com/markets/tech/26/05/52848628/super-micro-jumps-10-as-it-cracks-down-on-smuggling-with-new-taiwan-alliance",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "'Microsoft Partner IREN Borrows $3.6 Billion For NVIDIA Chips' - Bloomberg News",
+        "url": "https://www.benzinga.com/news/26/05/52848398/microsoft-partner-iren-borrows-3-6-billion-for-nvidia-chips-bloomberg-news",
+        "source": "benzinga",
+        "sentiment": null
+      },
+      {
+        "headline": "JPMorgan's AI Call Shifts ETF Focus Beyond Nvidia And Microsoft To Software Underdogs",
+        "url": "https://www.benzinga.com/etfs/sector-etfs/26/05/52845583/chip-etf-beyond-nvidia-microsoft",
+        "source": "benzinga",
+        "sentiment": null
+      }
+    ],
+    "sentiment_score": "0.289",
+    "sentiment_label": "Bullish",
+    "ts": "2026-05-28T23:11:57.341Z"
+  }
+]

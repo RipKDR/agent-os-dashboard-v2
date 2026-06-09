@@ -1,0 +1,414 @@
+#!/usr/bin/env node
+'use strict';
+
+const http = require('http');
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
+const { exec } = require('child_process');
+
+const ROOT = __dirname;
+const PORT = parseInt(process.env.AGENT_DASHBOARD_PORT || '45680', 10);
+const HOST = process.env.AGENT_DASHBOARD_HOST || '0.0.0.0';
+const WORKSPACE_ROOT = process.env.AGENT_WORKSPACE_ROOT || path.resolve('/home/admin/.openclaw/workspace');
+const DATA_DIR = path.join(ROOT, 'data');
+const OPENCLAW_BIN = process.env.OPENCLAW_BIN || '/home/admin/.npm-global/bin/openclaw';
+
+// ── Supabase ──────────────────────────────────────────────────
+const DASHBOARD_SUPABASE_URL = process.env.AGENT_DASHBOARD_SUPABASE_URL || '';
+const DASHBOARD_SUPABASE_KEY = process.env.AGENT_DASHBOARD_SUPABASE_KEY || '';
+
+// ── Agent Unity ───────────────────────────────────────────────
+const AGENT_UNITY_DIR = process.env.AGENT_UNITY_DIR || path.resolve('/home/admin/.agent-unity');
+
+// ── Helpers ───────────────────────────────────────────────────
+function sendJson(res, status, payload) {
+  const body = JSON.stringify(payload);
+  res.writeHead(status, {
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(body),
+    'Access-Control-Allow-Origin': '*',
+  });
+  res.end(body);
+}
+
+function readBody(req, limit = 256 * 1024) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', chunk => { data += chunk; if (data.length > limit) reject(new Error('body too large')); });
+    req.on('end', () => resolve(data));
+    req.on('error', reject);
+  });
+}
+
+function isAuthorized(req) {
+  const auth = req.headers['authorization'] || '';
+  if (!auth.startsWith('Basic ')) return false;
+  try {
+    const [user, pass] = Buffer.from(auth.slice(6), 'base64').toString().split(':');
+    return user === (process.env.AGENT_DASHBOARD_USER || 'admin') && pass === process.env.AGENT_DASHBOARD_PASSWORD;
+  } catch { return false; }
+}
+
+function requireAuth(req, res) {
+  if (isAuthorized(req)) return true;
+  res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Agent OS"' });
+  res.end('Unauthorized');
+  return false;
+}
+
+function fileInfo(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    return { exists: true, bytes: stat.size, updatedAt: stat.mtime.toISOString(), path: filePath };
+  } catch { return { exists: false, bytes: 0, updatedAt: null, path: filePath }; }
+}
+
+function readTextPreview(filePath, limit = 12000) {
+  try { return fs.readFileSync(filePath, 'utf8').slice(0, limit); } catch { return ''; }
+}
+
+function getAgentUnityStatus() {
+  const skillIndexPath = path.join(AGENT_UNITY_DIR, 'skill-index.json');
+  const skillIndexMdPath = path.join(AGENT_UNITY_DIR, 'skill-index.md');
+  const sharedContextPath = path.join(AGENT_UNITY_DIR, 'shared-context.md');
+  const syncLogPath = path.join(AGENT_UNITY_DIR, 'logs', 'last-sync.log');
+  const openclawBridgePath = path.join(WORKSPACE_ROOT, 'HERMES_OPENCLAW_BRIDGE.md');
+  const agentIds = ['alex', 'maya', 'jordan', 'dev', 'sam', 'orchestrator', 'hermes'];
+
+  let index = { skills: [], roots: {}, symlink_bridge: [], generated_at: null };
+  try { index = JSON.parse(fs.readFileSync(skillIndexPath, 'utf8')); } catch {}
+  const skills = Array.isArray(index.skills) ? index.skills : [];
+  const bySource = skills.reduce((acc, item) => {
+    const source = item.source || 'unknown';
+    acc[source] = (acc[source] || 0) + 1;
+    return acc;
+  }, {});
+  const namesByRuntime = skills.reduce((acc, item) => {
+    if (!item.name) return acc;
+    if (['hermes_local', 'cross_agent_shared'].includes(item.source)) acc.hermes.add(item.name);
+    if (['openclaw_agent_shared', 'openclaw_workspace'].includes(item.source)) acc.openclaw.add(item.name);
+    return acc;
+  }, { hermes: new Set(), openclaw: new Set() });
+  const sharedNames = [...namesByRuntime.hermes].filter(name => namesByRuntime.openclaw.has(name)).sort();
+  const bootstrap = [WORKSPACE_ROOT, ...agentIds.map(id => path.join(WORKSPACE_ROOT, id))].map(dir => {
+    const agentsPath = path.join(dir, 'AGENTS.md');
+    const text = readTextPreview(agentsPath, 200000);
+    return { id: path.basename(dir) === path.basename(WORKSPACE_ROOT) ? 'root' : path.basename(dir), path: agentsPath, present: text.includes('AGENT_UNITY_BRIDGE_BOOTSTRAP') };
+  });
+  const bridgeCopies = [openclawBridgePath, ...agentIds.map(id => path.join(WORKSPACE_ROOT, id, 'HERMES_OPENCLAW_BRIDGE.md'))].map(fileInfo);
+  return {
+    ok: fileInfo(skillIndexPath).exists && fileInfo(sharedContextPath).exists && bridgeCopies.every(f => f.exists) && bootstrap.every(b => b.present),
+    generatedAt: index.generated_at || null,
+    counts: { skillsTotal: skills.length, sharedSkillNames: sharedNames.length, ...bySource },
+    roots: index.roots || {},
+    symlinkBridge: Array.isArray(index.symlink_bridge) ? index.symlink_bridge : [],
+    files: { skillIndex: fileInfo(skillIndexPath), skillIndexMarkdown: fileInfo(skillIndexMdPath), sharedContext: fileInfo(sharedContextPath), openclawBridge: fileInfo(openclawBridgePath), lastSyncLog: fileInfo(syncLogPath) },
+    bridgeCopies, bootstrap,
+    sharedSkillSample: sharedNames.slice(0, 80),
+    syncLogTail: readTextPreview(syncLogPath, 12000).split('\n').slice(-30).join('\n').trim(),
+  };
+}
+
+function fetchUrl(url) {
+  return new Promise((resolve, reject) => {
+    const mod = url.startsWith('https') ? https : http;
+    mod.get(url, { headers: { 'User-Agent': 'AgentDashboard/1' } }, res => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(d); } });
+    }).on('error', reject);
+  });
+}
+
+// ── SSE Broadcasting ──────────────────────────────────────────
+const clients = new Set();
+function broadcast(event, data) {
+  const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const c of clients) {
+    try { c.write(msg); } catch { clients.delete(c); }
+  }
+}
+
+// ── JSON Store ────────────────────────────────────────────────
+function makeStore(filename, maxItems = 2000) {
+  const file = path.join(DATA_DIR, filename);
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (!fs.existsSync(file)) fs.writeFileSync(file, '[]');
+  function load() { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return []; } }
+  function save(arr) { fs.writeFileSync(file, JSON.stringify(arr.slice(-maxItems), null, 2)); }
+  return {
+    all: load,
+    append(item) { const arr = load(); arr.push({ ...item, id: item.id || Date.now().toString(36), created_at: new Date().toISOString() }); save(arr); return arr[arr.length - 1]; },
+    patch(id, updates) { const arr = load(); const i = arr.findIndex(x => x.id === id); if (i < 0) return null; Object.assign(arr[i], updates, { updated_at: new Date().toISOString() }); save(arr); return arr[i]; },
+    remove(id) { const arr = load(); const filtered = arr.filter(x => x.id !== id); save(filtered); return filtered.length < arr.length; },
+  };
+}
+
+const stores = {
+  tasks: makeStore('tasks.json', 2000),
+  captures: makeStore('captures.json', 5000),
+  projects: makeStore('projects.json', 500),
+  goals: makeStore('goals.json', 200),
+  contentIdeas: makeStore('content-ideas.json', 1000),
+  dailyBrief: makeStore('daily-brief.json', 30),
+  weeklyBrief: makeStore('weekly-briefs.json', 12),
+  whyNotes: makeStore('why-notes.json', 1000),
+  guideResearch: makeStore('guide-research.json', 1000),
+  standups: makeStore('standups.json', 100),
+  webhookEvents: makeStore('webhook-events.json', 500),
+};
+
+// ── Agent Dispatch ────────────────────────────────────────────
+function runAgent(agentId, message) {
+  return new Promise((resolve, reject) => {
+    const cmd = `${OPENCLAW_BIN} agent --agent ${agentId} --message ${JSON.stringify(message)} --json`;
+    exec(cmd, { cwd: WORKSPACE_ROOT, timeout: 660000, maxBuffer: 8 * 1024 * 1024, env: process.env }, (err, stdout, stderr) => {
+      if (err && !stdout) return reject(new Error(stderr || err.message));
+      try { resolve(JSON.parse(stdout)); } catch { resolve({ text: stdout.trim() }); }
+    });
+  });
+}
+
+// ── API Router ────────────────────────────────────────────────
+async function handleApi(req, res, url) {
+  const method = req.method;
+  const pathname = url.pathname;
+
+  // CORS preflight
+  if (method === 'OPTIONS') {
+    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type,Authorization' });
+    res.end();
+    return;
+  }
+
+  // Health check (no auth)
+  if (method === 'GET' && pathname === '/healthz') {
+    return sendJson(res, 200, { ok: true, status: 'healthy', uptime: process.uptime() });
+  }
+
+  // Agent Unity status (no auth — lightweight)
+  if (method === 'GET' && pathname === '/api/agent-unity') {
+    return sendJson(res, 200, getAgentUnityStatus());
+  }
+
+  // Config (no auth — needed by frontend)
+  if (method === 'GET' && pathname === '/api/config') {
+    return sendJson(res, 200, {
+      supabaseUrl: DASHBOARD_SUPABASE_URL,
+      supabaseKey: DASHBOARD_SUPABASE_KEY,
+    });
+  }
+
+  // Pending tasks (no auth — localhost only, for Hermes cron pickup)
+  if (method === 'GET' && pathname === '/api/tasks/pending') {
+    const tasks = stores.tasks.all();
+    const pending = tasks.filter(t => t.status === 'pending');
+    return sendJson(res, 200, pending);
+  }
+
+  // Task status updates from cron (no auth — localhost only)
+  if (method === 'PATCH' && pathname.startsWith('/api/tasks/')) {
+    const id = pathname.split('/').pop();
+    const body = JSON.parse(await readBody(req));
+    const task = stores.tasks.patch(id, body);
+    return sendJson(res, task ? 200 : 404, task || { error: 'not found' });
+  }
+
+  // Everything else requires auth
+  if (!requireAuth(req, res)) return;
+
+  // ── Tasks ──────────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/tasks') {
+    return sendJson(res, 200, stores.tasks.all().slice(-50).reverse());
+  }
+  if (method === 'POST' && pathname === '/api/tasks') {
+    const body = JSON.parse(await readBody(req));
+    const task = stores.tasks.append(body);
+    return sendJson(res, 201, task);
+  }
+  if (method === 'GET' && pathname.startsWith('/api/tasks/')) {
+    const id = pathname.split('/').pop();
+    const tasks = stores.tasks.all();
+    const task = tasks.find(t => t.id === id);
+    return sendJson(res, task ? 200 : 404, task || { error: 'not found' });
+  }
+  if (method === 'DELETE' && pathname.startsWith('/api/tasks/')) {
+    const id = pathname.split('/').pop();
+    stores.tasks.remove(id);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // ── Captures ───────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/captures') {
+    const limit = parseInt(url.searchParams.get('limit') || '20', 10);
+    return sendJson(res, 200, stores.captures.all().slice(-limit).reverse());
+  }
+  if (method === 'POST' && pathname === '/api/captures') {
+    const body = JSON.parse(await readBody(req));
+    const capture = stores.captures.append(body);
+    return sendJson(res, 201, capture);
+  }
+
+  // ── Projects ───────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/projects') {
+    return sendJson(res, 200, stores.projects.all().slice(-20).reverse());
+  }
+  if (method === 'POST' && pathname === '/api/projects') {
+    const body = JSON.parse(await readBody(req));
+    const project = stores.projects.append(body);
+    return sendJson(res, 201, project);
+  }
+
+  // ── Goals ──────────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/goals') {
+    return sendJson(res, 200, stores.goals.all());
+  }
+  if (method === 'POST' && pathname === '/api/goals') {
+    const body = JSON.parse(await readBody(req));
+    const goal = stores.goals.append(body);
+    return sendJson(res, 201, goal);
+  }
+
+  // ── Agent Dispatch ─────────────────────────────────────────
+  if (method === 'POST' && pathname === '/api/agents/dispatch') {
+    const body = JSON.parse(await readBody(req));
+    const { agent, message } = body;
+    if (!agent || !message) return sendJson(res, 400, { error: 'agent and message required' });
+
+    const task = stores.tasks.append({
+      title: message.substring(0, 120),
+      description: message,
+      agent,
+      status: 'pending',
+      source: 'dashboard',
+    });
+
+    console.log(`[DISPATCH] Task ${task.id} → ${agent}: ${message.substring(0, 80)}`);
+
+    return sendJson(res, 202, {
+      ok: true,
+      task,
+      message: `Task dispatched to ${agent}. Hermes will process it shortly.`,
+    });
+  }
+
+  // ── Pending tasks (for Hermes cron pickup) ─────────────────
+  if (method === 'GET' && pathname === '/api/tasks/pending') {
+    const tasks = stores.tasks.all();
+    const pending = tasks.filter(t => t.status === 'pending' || t.status === 'dispatched');
+    return sendJson(res, 200, pending);
+  }
+
+  // ── Agent Logs (from Supabase) ─────────────────────────────
+  if (method === 'GET' && pathname === '/api/agent-logs') {
+    if (!DASHBOARD_SUPABASE_URL || !DASHBOARD_SUPABASE_KEY) {
+      return sendJson(res, 503, { error: 'Supabase not configured' });
+    }
+    try {
+      const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+      const supabaseRes = await fetch(`${DASHBOARD_SUPABASE_URL}/rest/v1/agent_logs?select=*&order=created_at.desc&limit=${limit}`, {
+        headers: {
+          'apikey': DASHBOARD_SUPABASE_KEY,
+          'Authorization': `Bearer ${DASHBOARD_SUPABASE_KEY}`,
+        },
+      });
+      const data = await supabaseRes.json();
+      return sendJson(res, 200, data);
+    } catch (e) {
+      return sendJson(res, 502, { error: e.message });
+    }
+  }
+
+  // ── Agent Stats ────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/agent-stats') {
+    if (!DASHBOARD_SUPABASE_URL || !DASHBOARD_SUPABASE_KEY) {
+      return sendJson(res, 503, { error: 'Supabase not configured' });
+    }
+    try {
+      const supabaseRes = await fetch(`${DASHBOARD_SUPABASE_URL}/rest/v1/agent_logs?select=agent_name,status&order=created_at.desc&limit=100`, {
+        headers: {
+          'apikey': DASHBOARD_SUPABASE_KEY,
+          'Authorization': `Bearer ${DASHBOARD_SUPABASE_KEY}`,
+        },
+      });
+      const logs = await supabaseRes.json();
+      const stats = {};
+      for (const log of logs) {
+        if (!stats[log.agent_name]) stats[log.agent_name] = { total: 0, completed: 0, failed: 0, running: 0 };
+        stats[log.agent_name].total++;
+        stats[log.agent_name][log.status] = (stats[log.agent_name][log.status] || 0) + 1;
+      }
+      return sendJson(res, 200, stats);
+    } catch (e) {
+      return sendJson(res, 502, { error: e.message });
+    }
+  }
+
+  // ── SSE Events ─────────────────────────────────────────────
+  if (pathname === '/api/events') {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    });
+    res.write(`event: connected\ndata: ${JSON.stringify({ time: Date.now() })}\n\n`);
+    clients.add(res);
+    req.on('close', () => clients.delete(res));
+    return;
+  }
+
+  // ── Status ─────────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/status') {
+    return sendJson(res, 200, {
+      ok: true,
+      workspace: WORKSPACE_ROOT,
+      uptime: process.uptime(),
+      memory: process.memoryUsage().rss,
+    });
+  }
+
+  // ── 404 ────────────────────────────────────────────────────
+  sendJson(res, 404, { error: 'not found' });
+}
+
+// ── HTTP Server ──────────────────────────────────────────────
+const server = http.createServer(async (req, res) => {
+  const reqUrl = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
+
+  // API routes
+  if (reqUrl.pathname.startsWith('/api/')) return handleApi(req, res, reqUrl);
+
+  // SSE endpoint
+  if (reqUrl.pathname === '/api/events') return handleApi(req, res, reqUrl);
+
+  // Static file serving
+  const safeName = path.normalize(decodeURIComponent(reqUrl.pathname)).replace(/^([/\\\\]*\\.\\.[/\\\\]*)+/, '');
+  let filePath = path.join(ROOT, safeName === '/' ? 'index.html' : safeName);
+  if (!filePath.startsWith(ROOT)) { res.writeHead(403); res.end('Forbidden'); return; }
+
+  fs.stat(filePath, (err, stat) => {
+    if (err || !stat.isFile()) filePath = path.join(ROOT, 'index.html');
+    fs.readFile(filePath, (readErr, data) => {
+      if (readErr) { res.writeHead(404); res.end('Not found'); return; }
+      const ext = path.extname(filePath).toLowerCase();
+      const types = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
+      res.writeHead(200, {
+        'Content-Type': types[ext] || 'application/octet-stream',
+        'Cache-Control': filePath.endsWith('index.html') ? 'no-cache, must-revalidate' : 'public, max-age=3600',
+      });
+      res.end(data);
+    });
+  });
+});
+
+// ── Start ────────────────────────────────────────────────────
+server.listen(PORT, HOST, () => {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  console.log(`▒ Agent OS Dashboard v1.0`);
+  console.log(`▒ Listening on http://${HOST}:${PORT}`);
+  console.log(`▒ Workspace: ${WORKSPACE_ROOT}`);
+});
+
+process.on('SIGTERM', () => { server.close(); process.exit(0); });
+process.on('SIGINT', () => { server.close(); process.exit(0); });

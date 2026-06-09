@@ -1,0 +1,14 @@
+[
+  {
+    "id": "defaults",
+    "name": "defaults",
+    "role": "Agent",
+    "model": "openai-codex/gpt-5.5"
+  },
+  {
+    "id": "list",
+    "name": "list",
+    "role": "Agent",
+    "model": "openai-codex/gpt-5.5"
+  }
+]

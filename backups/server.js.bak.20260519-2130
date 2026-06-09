@@ -1,0 +1,3013 @@
+#!/usr/bin/env node
+'use strict';
+
+const http = require('http');
+const net = require('net');
+const fs = require('fs');
+const path = require('path');
+const zlib = require('zlib');
+const { execFile, spawn } = require('child_process');
+const EventEmitter = require('events');
+const https = require('https');
+const crypto = require('crypto');
+const { writeTradeJournal, listVaultJournalFiles, ensureTickerPage } = require('./services/journal');
+const tradingPipeline = require('./trading/pipeline');
+
+// ─── Configuration ───────────────────────────────────────────
+const HOST = process.env.AGENT_DASHBOARD_HOST || '127.0.0.1';
+const PORT = Number(process.env.AGENT_DASHBOARD_PORT || 45680);
+const ROOT = __dirname;
+const WORKSPACE_ROOT = process.env.AGENT_WORKSPACE_ROOT || path.resolve('/home/admin/.openclaw/workspace');
+const DATA_DIR = process.env.AGENT_DASHBOARD_DATA_DIR || path.join(ROOT, 'data');
+const CHAT_FILE = path.join(DATA_DIR, 'chat_messages.json');
+
+// ─── Gzip ─────────────────────────────────────────────────
+function gzipOrRaw(res, data, headers = {}) {
+  const accepts = res.req.headers['accept-encoding'] || '';
+  if (accepts.includes('gzip')) {
+    res.writeHead(200, { ...headers, 'Content-Encoding': 'gzip', 'Vary': 'Accept-Encoding' });
+    res.end(zlib.gzipSync(data));
+  } else {
+    res.writeHead(200, { ...headers });
+    res.end(data);
+  }
+}
+const OPENCLAW_BIN = process.env.OPENCLAW_BIN || 'openclaw';
+const DASHBOARD_USER = process.env.AGENT_DASHBOARD_USER || '';
+const DASHBOARD_PASSWORD = process.env.AGENT_DASHBOARD_PASSWORD || '';
+const DASHBOARD_SUPABASE_URL = process.env.AGENT_DASHBOARD_SUPABASE_URL || '';
+const DASHBOARD_SUPABASE_KEY = process.env.AGENT_DASHBOARD_SUPABASE_KEY || '';
+const MAX_CLI_SESSIONS = 3;
+const MAX_FILE_PREVIEW = 512 * 1024;
+const IGNORED_DIRS = new Set(['node_modules', '.git', '.next', '.expo', 'dist', 'build', '.cache', 'coverage']);
+const DISCORD_WEBHOOK = process.env.AGENT_DISCORD_WEBHOOK || '';
+const WEBHOOK_SECRET  = process.env.AGENT_WEBHOOK_SECRET  || '';
+const ALPACA_KEY_ID     = process.env.ALPACA_KEY_ID     || '';
+const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY || '';
+const ALPACA_PAPER      = (process.env.ALPACA_PAPER || 'true') !== 'false';
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+const VAULT_ROOT = process.env.VAULT_ROOT || path.resolve('/home/admin/Vault');
+const AV_API_KEY = process.env.ALPHA_VANTAGE_API_KEY || '';
+const TRADE_PIN           = process.env.TRADE_CONFIRM_PIN   || '';
+const TRADE_PIN_THRESHOLD = Number(process.env.TRADE_PIN_THRESHOLD || 500);
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
+const GITHUB_REPO  = process.env.GITHUB_REPO  || '';
+
+const alpaca = (ALPACA_KEY_ID && ALPACA_SECRET_KEY)
+  ? require('./trading/alpaca')
+  : null;
+
+const riskGov  = alpaca ? require('./trading/risk-governor') : null;
+const scheduler = alpaca ? require('./trading/scheduler')    : null;
+
+// ─── TTL Cache ───────────────────────────────────────────────
+const CACHE = new Map();
+function withCache(key, ttlMs, fn) {
+  const hit = CACHE.get(key);
+  if (hit && Date.now() < hit.exp) return Promise.resolve(hit.data);
+  return fn().then(data => { CACHE.set(key, { data, exp: Date.now() + ttlMs }); return data; });
+}
+
+// ─── External Fetch Helper ───────────────────────────────────
+function fetchUrl(url, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const mod = url.startsWith('https') ? https : http;
+    mod.get(url, { headers: { 'User-Agent': 'AgentDashboard/2', ...headers } }, res => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(d); } });
+    }).on('error', reject);
+  });
+}
+
+// ─── Event Bus ───────────────────────────────────────────────
+const eventBus = new EventEmitter();
+eventBus.setMaxListeners(100);
+
+function broadcast(event, data) {
+  eventBus.emit(event, data);
+}
+
+// ─── Agent Map ───────────────────────────────────────────────
+const AGENT_MAP = {
+  claw: 'main', main: 'main', alex: 'alex', maya: 'maya',
+  jordan: 'jordan', dev: 'dev', sam: 'sam',
+};
+
+const SPECIALIST_LOGGING_GATE = `\n\n[Dashboard: before final reply, if Alex/Maya/Jordan/Dev/Sam, log this to Supabase agent_logs with status completed or failed. If logging fails after one retry, report that blocker.]`;
+
+// ─── Chat Store ──────────────────────────────────────────────
+function ensureStore() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (!fs.existsSync(CHAT_FILE)) fs.writeFileSync(CHAT_FILE, '[]\n');
+}
+
+function readMessages() {
+  ensureStore();
+  try {
+    const raw = fs.readFileSync(CHAT_FILE, 'utf8');
+    const parsed = JSON.parse(raw || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+function writeMessages(messages) {
+  ensureStore();
+  const tmp = `${CHAT_FILE}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(messages, null, 2) + '\n');
+  fs.renameSync(tmp, CHAT_FILE);
+}
+
+function appendMessage(msg) {
+  const messages = readMessages();
+  const row = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, created_at: new Date().toISOString(), ...msg };
+  messages.push(row);
+  writeMessages(messages.slice(-1000));
+  return row;
+}
+
+// ─── Generic JSON Store Factory ──────────────────────────────
+function makeStore(filename, maxItems = 2000) {
+  const file = path.join(DATA_DIR, filename);
+  const read = () => {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    try { const r = fs.readFileSync(file, 'utf8'); const p = JSON.parse(r || '[]'); return Array.isArray(p) ? p : []; } catch { return []; }
+  };
+  const write = (items) => {
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(items.slice(-maxItems), null, 2) + '\n');
+    fs.renameSync(tmp, file);
+  };
+  return {
+    all: read,
+    append: (item) => {
+      const items = read();
+      const row = { id: `${Date.now()}-${Math.random().toString(36).slice(2,7)}`, created_at: new Date().toISOString(), ...item };
+      items.push(row);
+      write(items);
+      return row;
+    },
+    patch: (id, updates) => {
+      const items = read();
+      const i = items.findIndex(x => x.id === id);
+      if (i < 0) return null;
+      items[i] = { ...items[i], ...updates, updated_at: new Date().toISOString() };
+      write(items);
+      return items[i];
+    },
+    remove: (id) => {
+      const items = read();
+      const next = items.filter(x => x.id !== id);
+      write(next);
+      return next.length < items.length;
+    },
+  };
+}
+
+// ─── Data Stores ─────────────────────────────────────────────
+const stores = {
+  projects:       makeStore('projects.json'),
+  goals:          makeStore('goals.json'),
+  contentIdeas:   makeStore('content-ideas.json'),
+  contentVideos:  makeStore('content-videos.json'),
+  watchlist:      makeStore('watchlist.json'),
+  signals:        makeStore('trade-signals.json'),
+  journal:        makeStore('trade-journal.json'),
+  positions:      makeStore('positions.json'),
+  priceAlerts:    makeStore('price-alerts.json'),
+  factoryProps:   makeStore('factory-proposals.json'),
+  emailInbox:     makeStore('email-inbox.json'),
+  standups:       makeStore('standups.json'),
+  webhookEvents:  makeStore('webhook-events.json'),
+  dailyBrief:     makeStore('daily-brief.json', 30),
+  captures:       makeStore('captures.json', 5000),
+  tasks:          makeStore('tasks.json', 2000),
+  whyNotes:       makeStore('why-notes.json', 1000),
+  featureVectors: makeStore('feature-vectors.json', 10000),
+  forecasts:      makeStore('forecasts.json', 5000),
+  newsEvents:     makeStore('news-events.json', 500),
+  guideResearch:  makeStore('guide-research.json', 1000),
+  sessionHL:      makeStore('session-highlow.json', 500),
+  weeklyBrief:    makeStore('weekly-briefs.json', 12),
+  socialSentiment: makeStore('social-sentiment.json', 200),
+  edgarFilings:   makeStore('edgar-filings.json', 300),
+  pipelineResults: makeStore('pipeline-results.json', 50),
+};
+
+function readJsonFile(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8') || '{}'); } catch { return {}; }
+}
+
+// ─── Direct LLM (OpenRouter, fast path) ──────────────────────
+function callLLM(systemPrompt, userPrompt, model = 'anthropic/claude-haiku-4-5') {
+  return new Promise((resolve, reject) => {
+    if (!OPENROUTER_API_KEY) return reject(new Error('OPENROUTER_API_KEY not set'));
+    const body = JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: userPrompt },
+      ],
+      max_tokens: 600,
+    });
+    const req = https.request({
+      hostname: 'openrouter.ai',
+      path: '/api/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+        'HTTP-Referer': 'https://atlas.local',
+        'X-Title': 'Atlas Why Engine',
+      },
+    }, res => {
+      let raw = '';
+      res.on('data', c => raw += c);
+      res.on('end', () => {
+        try {
+          const d = JSON.parse(raw);
+          if (d.error) return reject(new Error(d.error.message || JSON.stringify(d.error)));
+          resolve(d.choices?.[0]?.message?.content || '');
+        } catch(e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+// ─── Intent Classifier (rules-based v1) ──────────────────────
+function classifyIntent(text) {
+  const t = (text || '').toLowerCase().trim();
+  if (/^\[(idea|task|question|trade|project|clip|journal)\]/.test(t)) {
+    const tag = t.match(/^\[([^\]]+)\]/)?.[1];
+    return tag === 'trade' ? 'trade_thesis' : tag;
+  }
+  if (/\$[a-z]{1,6}\b/.test(t) || /^(buy|sell|long|short|enter|exit|trade|position|invest)\b/.test(t)) return 'trade_thesis';
+  if (/^(project|initiative|ship|launch)\b/.test(t)) return 'project';
+  if (/^(idea|thought|concept|what if|maybe|could we|imagine)\b/.test(t)) return 'idea';
+  if (/^(task|todo|do|build|fix|add|update|change|create|make|implement)\b/.test(t)) return 'task';
+  if (/^(why|how|what|when|where|who|is|are|does|can)\b/.test(t) || t.endsWith('?')) return 'question';
+  if (/^(journal|today|feeling|note|log|diary)\b/.test(t)) return 'journal';
+  if (/\bhttps?:\/\//.test(t) || /^(http|www\.)/.test(t)) return 'clip';
+  return 'idea';
+}
+
+function cleanCaptureText(text) {
+  return String(text || '').replace(/^\s*\[[^\]]+\]\s*/, '').trim();
+}
+
+function extractTicker(text) {
+  const raw = String(text || '');
+  const cashtag = raw.match(/\$([A-Z]{1,6})(?:\b|\s|$)/i);
+  if (cashtag) return cashtag[1].toUpperCase();
+  const direct = raw.match(/\b([A-Z]{2,6})\b/);
+  return direct ? direct[1].toUpperCase() : '';
+}
+
+function inferTradeDirection(text) {
+  const t = String(text || '').toLowerCase();
+  if (/\b(short|sell|bear|bearish|puts?)\b/.test(t)) return 'short';
+  if (/\b(long|buy|bull|bullish|calls?|enter|invest)\b/.test(t)) return 'long';
+  return 'watch';
+}
+
+function routeCapture(capture, text, intent) {
+  const cleaned = cleanCaptureText(text);
+  const title = cleaned.slice(0, 96) || 'Untitled capture';
+  const base = { capture_id: capture.id, intent, routed_at: new Date().toISOString() };
+
+  if (intent === 'task') {
+    const task = stores.tasks.append({
+      title,
+      description: cleaned,
+      status: 'todo',
+      source: 'capture',
+      capture_id: capture.id,
+    });
+    return { ...base, destination: 'tasks', action: 'created_task', id: task.id, label: task.title };
+  }
+
+  if (intent === 'project') {
+    const project = stores.projects.append({
+      name: title,
+      description: cleaned,
+      status: 'active',
+      source: 'capture',
+      capture_id: capture.id,
+    });
+    return { ...base, destination: 'projects', action: 'created_project', id: project.id, label: project.name };
+  }
+
+  if (intent === 'idea') {
+    const idea = stores.contentIdeas.append({
+      title,
+      summary: cleaned,
+      source: 'capture',
+      status: 'idea',
+      capture_id: capture.id,
+    });
+    return { ...base, destination: 'content_ideas', action: 'created_idea', id: idea.id, label: idea.title };
+  }
+
+  if (intent === 'trade_thesis') {
+    const ticker = extractTicker(text);
+    const direction = inferTradeDirection(text);
+    if (ticker) {
+      const signal = stores.signals.append({
+        ticker,
+        direction,
+        thesis: cleaned,
+        rationale: cleaned,
+        confidence: 2,
+        source: 'capture',
+        capture_id: capture.id,
+        status: 'watching',
+        ts: new Date().toISOString(),
+      });
+      return { ...base, destination: 'trading_signals', action: 'created_signal', id: signal.id, label: ticker };
+    }
+    return { ...base, destination: 'captures', action: 'needs_ticker', label: 'Ticker needed before signal creation' };
+  }
+
+  if (intent === 'journal') {
+    const entry = stores.journal.append({
+      ticker: extractTicker(text) || null,
+      direction: 'note',
+      thesis: cleaned,
+      lessons: '',
+      source: 'capture',
+      capture_id: capture.id,
+      ts: new Date().toISOString(),
+    });
+    return { ...base, destination: 'trade_journal', action: 'created_journal_note', id: entry.id, label: title };
+  }
+
+  if (intent === 'clip') {
+    return { ...base, destination: 'capture_inbox', action: 'saved_clip', label: title };
+  }
+
+  return { ...base, destination: 'capture_inbox', action: 'saved_question', label: title };
+}
+function writeJsonFile(file, data) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n');
+  fs.renameSync(tmp, file);
+}
+
+// ─── Agent Config ─────────────────────────────────────────────
+function getAgentConfig() {
+  const agentsFile = path.join(DATA_DIR, 'agents.json');
+  if (fs.existsSync(agentsFile)) {
+    try { return JSON.parse(fs.readFileSync(agentsFile, 'utf8')); } catch {}
+  }
+  // Parse AGENTS.md for agent info
+  try {
+    const md = fs.readFileSync(path.join(WORKSPACE_ROOT, 'AGENTS.md'), 'utf8');
+    const agents = [];
+    const tableRegex = /\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|/g;
+    let m;
+    while ((m = tableRegex.exec(md)) !== null) {
+      const [, name, id, , domain] = m.map(s => s.trim());
+      if (name && id && !name.startsWith('-') && name !== 'Agent') {
+        agents.push({ id: id.replace(/`/g,'').toLowerCase(), name: name.replace(/[^\w\s]/g,'').trim(), role: domain.replace(/[^\w\s,/]/g,'').trim() });
+      }
+    }
+    if (agents.length) return agents;
+  } catch {}
+  // Parse openclaw.json
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(WORKSPACE_ROOT, '..', 'openclaw.json'), 'utf8'));
+    const agentCfg = cfg.agents || {};
+    return Object.entries(agentCfg).map(([id, a]) => ({ id, name: a.name || id, role: a.role || a.description || 'Agent', model: a.model || '' }));
+  } catch {}
+  return [
+    { id:'alex',   name:'Alex',   role:'Product Research' },
+    { id:'maya',   name:'Maya',   role:'UX / UI' },
+    { id:'jordan', name:'Jordan', role:'Architecture' },
+    { id:'dev',    name:'Dev',    role:'Implementation' },
+    { id:'sam',    name:'Sam',    role:'QA / Release' },
+  ];
+}
+
+// ─── Cron Jobs ────────────────────────────────────────────────
+function getCronJobs() {
+  const jobs = [];
+  // Try openclaw.json
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(WORKSPACE_ROOT, '..', 'openclaw.json'), 'utf8'));
+    const sched = cfg.schedule || cfg.cron || cfg.heartbeat || {};
+    Object.entries(sched).forEach(([name, val]) => {
+      const entry = typeof val === 'object' ? val : { schedule: val };
+      jobs.push({ agent: entry.agent || 'main', job_name: name, schedule_human: entry.schedule || entry.cron || String(val), next_run: null, last_run: null, status: 'scheduled' });
+    });
+  } catch {}
+  // Walk workspace for *.heartbeat.json
+  try {
+    const { files } = walkDir(WORKSPACE_ROOT, { maxDepth: 3, fileTest: e => e.name.endsWith('.heartbeat.json') });
+    files.forEach(f => {
+      try {
+        const hb = JSON.parse(fs.readFileSync(f, 'utf8'));
+        jobs.push({ agent: hb.agent || path.basename(f, '.heartbeat.json'), job_name: hb.job || hb.name || path.basename(f), schedule_human: hb.schedule || hb.cron || '—', next_run: hb.next_run || null, last_run: hb.last_run || null, status: hb.status || 'scheduled' });
+      } catch {}
+    });
+  } catch {}
+  return jobs;
+}
+
+// ─── Cost Aggregation ─────────────────────────────────────────
+const MODEL_PRICES = {
+  'claude-opus':    { input: 0.015,  output: 0.075  },
+  'claude-sonnet':  { input: 0.003,  output: 0.015  },
+  'claude-haiku':   { input: 0.00025,output: 0.00125},
+  'gpt-4':          { input: 0.01,   output: 0.03   },
+  'gpt-4o':         { input: 0.005,  output: 0.015  },
+  'gpt-4o-mini':    { input: 0.00015,output: 0.0006 },
+  'gemma':          { input: 0,      output: 0       },
+  'ollama':         { input: 0,      output: 0       },
+  'local':          { input: 0,      output: 0       },
+};
+const AVG_TOKENS = 2000;
+
+function modelPrice(modelStr) {
+  if (!modelStr) return 0;
+  const m = modelStr.toLowerCase();
+  for (const [key, p] of Object.entries(MODEL_PRICES)) {
+    if (m.includes(key)) return ((p.input + p.output) / 2) * (AVG_TOKENS / 1000);
+  }
+  return 0.003 * (AVG_TOKENS / 1000);
+}
+
+// ─── Market Data Proxies ──────────────────────────────────────
+async function yahooQuote(ticker) {
+  return withCache(`yq:${ticker}`, 60000, () =>
+    fetchUrl(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1y`)
+      .then(d => {
+        const q = d?.chart?.result?.[0];
+        if (!q) throw new Error('no data');
+        const meta = q.meta || {};
+        const closes = q.indicators?.quote?.[0]?.close || [];
+        const high52 = Math.max(...closes.filter(Boolean));
+        const low52  = Math.min(...closes.filter(Boolean));
+        return {
+          ticker, price: meta.regularMarketPrice || 0,
+          change: (meta.regularMarketPrice || 0) - (meta.previousClose || 0),
+          change_pct: meta.regularMarketPrice && meta.previousClose
+            ? (((meta.regularMarketPrice - meta.previousClose) / meta.previousClose) * 100).toFixed(2) : '0.00',
+          volume: meta.regularMarketVolume || 0,
+          market_cap: meta.marketCap || 0,
+          high_52w: high52, low_52w: low52,
+          day_high: meta.regularMarketDayHigh || null,
+          day_low:  meta.regularMarketDayLow  || null,
+          currency: meta.currency || 'USD',
+          closes: closes.slice(-30),
+          timestamps: q.timestamp?.slice(-30) || [],
+        };
+      })
+  );
+}
+
+async function yahooEarnings(ticker) {
+  return withCache(`ye:${ticker}`, 3600000, () =>
+    fetchUrl(`https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(ticker)}?modules=calendarEvents`)
+      .then(d => {
+        const ev = d?.quoteSummary?.result?.[0]?.calendarEvents?.earnings;
+        return { ticker, earnings_date: ev?.earningsDate?.[0]?.fmt || null, eps_estimate: ev?.consensusEps?.raw || null };
+      })
+  );
+}
+
+async function fredSeries(seriesId) {
+  return withCache(`fred:${seriesId}`, 300000, () =>
+    fetchUrl(`https://fred.stlouisfed.org/graph/fredgraph.json?id=${seriesId}`)
+      .then(d => { const obs = d?.observations || []; const last = obs[obs.length-1]; return { id: seriesId, value: last?.value || '—', date: last?.date || '' }; })
+  );
+}
+
+// ─── Discord Notifier ─────────────────────────────────────────
+function notifyDiscord(content) {
+  if (!DISCORD_WEBHOOK) return;
+  try {
+    const body = JSON.stringify({ content });
+    const u = new URL(DISCORD_WEBHOOK);
+    https.request({ hostname: u.hostname, path: u.pathname + u.search, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, () => {}).end(body);
+  } catch {}
+}
+
+// ─── Settings File ────────────────────────────────────────────
+const SETTINGS_FILE    = path.join(DATA_DIR, 'settings.json');
+const TR_SETTINGS_FILE = path.join(DATA_DIR, 'trade-settings.json');
+
+// ─── Helpers ─────────────────────────────────────────────────
+function sendJson(res, status, payload) {
+  const body = JSON.stringify(payload);
+  const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+  const accepts = res.req?.headers['accept-encoding'] || '';
+  if (accepts.includes('gzip') && body.length > 512) {
+    headers['Content-Encoding'] = 'gzip';
+    headers['Vary'] = 'Accept-Encoding';
+    res.writeHead(status, headers);
+    res.end(zlib.gzipSync(body));
+  } else {
+    headers['Content-Length'] = Buffer.byteLength(body);
+    res.writeHead(status, headers);
+    res.end(body);
+  }
+}
+
+function safeCompare(a, b) {
+  const la = Buffer.from(String(a || '')), lb = Buffer.from(String(b || ''));
+  return la.length === lb.length && crypto.timingSafeEqual(la, lb);
+}
+
+function isAuthorized(req) {
+  if (!DASHBOARD_USER || !DASHBOARD_PASSWORD) return true;
+  const h = req.headers.authorization || '';
+  if (!h.startsWith('Basic ')) return false;
+  try {
+    const d = Buffer.from(h.slice(6), 'base64').toString('utf8');
+    const i = d.indexOf(':');
+    if (i < 0) return false;
+    return safeCompare(d.slice(0, i), DASHBOARD_USER) && safeCompare(d.slice(i + 1), DASHBOARD_PASSWORD);
+  } catch { return false; }
+}
+
+function requireAuth(req, res) {
+  if (isAuthorized(req)) return true;
+  res.writeHead(401, {
+    'WWW-Authenticate': 'Basic realm="Agent Dashboard", charset="UTF-8"',
+    'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store',
+  });
+  res.end('Authentication required');
+  return false;
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', c => { body += c; if (body.length > 256 * 1024) { req.destroy(); reject(new Error('Body too large')); } });
+    req.on('end', () => resolve(body));
+    req.on('error', reject);
+  });
+}
+
+function readBodyRaw(req, maxBytes = 10 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on('data', c => { total += c.length; if (total > maxBytes) { req.destroy(); reject(new Error('File too large (max 10MB)')); } chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+function splitBuffer(buf, sep) {
+  const parts = [];
+  let start = 0;
+  while (true) {
+    const idx = buf.indexOf(sep, start);
+    if (idx === -1) { parts.push(buf.slice(start)); break; }
+    parts.push(buf.slice(start, idx));
+    start = idx + sep.length;
+  }
+  return parts;
+}
+
+function safePath(userPath) {
+  const clean = decodeURIComponent(userPath).replace(/^\/+/, '');
+  const resolved = path.resolve(WORKSPACE_ROOT, clean);
+  if (!resolved.startsWith(WORKSPACE_ROOT)) throw new Error('Path traversal');
+  return resolved;
+}
+
+// ─── Agent Runner ────────────────────────────────────────────
+function extractAgentText(stdout) {
+  const text = String(stdout || '').trim();
+  if (!text) return '';
+  try {
+    const parsed = JSON.parse(text);
+    const payloads = Array.isArray(parsed?.payloads) ? parsed.payloads : (Array.isArray(parsed?.result?.payloads) ? parsed.result.payloads : null);
+    if (payloads?.[0]?.text) return payloads.map(p => p.text).filter(Boolean).join('\n\n');
+    if (typeof parsed?.result?.finalAssistantVisibleText === 'string') return parsed.result.finalAssistantVisibleText;
+    if (typeof parsed?.text === 'string') return parsed.text;
+    if (typeof parsed?.message === 'string') return parsed.message;
+  } catch {}
+  return text;
+}
+
+function runAgent(agentName, message) {
+  const agentId = AGENT_MAP[String(agentName).toLowerCase()];
+  if (!agentId) return Promise.reject(new Error(`Unknown agent: ${agentName}`));
+  const prompt = agentId === 'main' ? message : `${message}${SPECIALIST_LOGGING_GATE}`;
+  return new Promise((resolve, reject) => {
+    execFile(OPENCLAW_BIN, ['agent', '--agent', agentId, '--message', prompt, '--json', '--timeout', '600'], {
+      cwd: WORKSPACE_ROOT, timeout: 660000, maxBuffer: 8 * 1024 * 1024, env: process.env,
+    }, (err, stdout, stderr) => {
+      if (err) return reject(new Error(String(stderr || stdout || err.message).trim()));
+      resolve(extractAgentText(stdout) || '(No response)');
+    });
+  });
+}
+
+// ─── CLI Process Manager ─────────────────────────────────────
+const CLI_SESSIONS = new Map();
+
+function startCLI(type, cwd = WORKSPACE_ROOT) {
+  if (CLI_SESSIONS.size >= MAX_CLI_SESSIONS) throw new Error(`Max ${MAX_CLI_SESSIONS} CLI sessions`);
+  const cmd = type === 'codex' ? 'codex' : 'claude';
+
+  const id = `cli-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const proc = spawn(cmd, [], { cwd, shell: true, env: { ...process.env } });
+
+  const session = { id, type, cmd, proc, cwd, startedAt: new Date(), lastActivity: new Date(), listeners: new Set(), buffer: [] };
+  CLI_SESSIONS.set(id, session);
+
+  proc.stdout.on('data', (data) => {
+    const s = data.toString();
+    session.buffer.push(s);
+    if (session.buffer.length > 1000) session.buffer.shift();
+    broadcast('cli-output', { id, type, data: s });
+  });
+
+  proc.stderr.on('data', (data) => {
+    const s = data.toString();
+    session.buffer.push(s);
+    broadcast('cli-output', { id, type, data: s, stream: 'stderr' });
+  });
+
+  proc.on('exit', (code) => {
+    broadcast('cli-exit', { id, type, code });
+    CLI_SESSIONS.delete(id);
+  });
+
+  proc.on('error', (err) => {
+    broadcast('cli-error', { id, type, error: err.message });
+    CLI_SESSIONS.delete(id);
+  });
+
+  return id;
+}
+
+function sendCLIInput(id, input) {
+  const s = CLI_SESSIONS.get(id);
+  if (!s || !s.proc.stdin.writable) throw new Error('Session not active');
+  s.lastActivity = new Date();
+  s.proc.stdin.write(input + '\n');
+}
+
+function stopCLI(id) {
+  const s = CLI_SESSIONS.get(id);
+  if (!s) return;
+  s.proc.kill('SIGTERM');
+  setTimeout(() => { if (CLI_SESSIONS.has(id)) s.proc.kill('SIGKILL'); }, 5000);
+}
+
+function getCLISessions() {
+  return Array.from(CLI_SESSIONS.values()).map(s => ({
+    id: s.id, type: s.type, cmd: s.cmd, cwd: s.cwd,
+    startedAt: s.startedAt, lastActivity: s.lastActivity,
+  }));
+}
+
+// ─── File System API ─────────────────────────────────────────
+function listDir(dirPath) {
+  const resolved = safePath(dirPath);
+  const entries = fs.readdirSync(resolved, { withFileTypes: true });
+  const items = entries.map(e => {
+    const full = path.join(resolved, e.name);
+    let stat;
+    try { stat = fs.statSync(full); } catch { return null; }
+    return {
+      name: e.name, isDir: e.isDirectory(), size: stat.size,
+      mtime: stat.mtime.toISOString(), mode: stat.mode.toString(8),
+    };
+  }).filter(Boolean);
+  items.sort((a, b) => {
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  return { path: resolved, items };
+}
+
+function parseFrontmatter(content) {
+  const fm = { tags: [], links: [] };
+  // YAML frontmatter
+  const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (fmMatch) {
+    const yaml = fmMatch[1];
+    // tags: [a, b] or tags:\n  - a\n  - b
+    const tagsLine = yaml.match(/^tags:\s*\[([^\]]+)\]/m);
+    if (tagsLine) {
+      fm.tags = tagsLine[1].split(',').map(t => t.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+    } else {
+      const tagsBlock = yaml.match(/^tags:\s*\n((?:\s+-\s*.+\n?)+)/m);
+      if (tagsBlock) {
+        fm.tags = tagsBlock[1].split('\n').map(l => l.replace(/^\s+-\s*/, '').trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+      }
+    }
+    // inline tags from body and frontmatter: #tagname
+    const inlineTags = content.match(/#([a-zA-Z][\w/-]+)/g) || [];
+    inlineTags.forEach(t => { const v = t.slice(1); if (!fm.tags.includes(v)) fm.tags.push(v); });
+  } else {
+    // No frontmatter — still collect inline #tags
+    const inlineTags = content.match(/#([a-zA-Z][\w/-]+)/g) || [];
+    inlineTags.forEach(t => { const v = t.slice(1); if (!fm.tags.includes(v)) fm.tags.push(v); });
+  }
+  // Wikilinks [[Note Name]] or [[Note Name|alias]]
+  const wikilinkRe = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
+  let m;
+  while ((m = wikilinkRe.exec(content)) !== null) fm.links.push(m[1].trim());
+  return fm;
+}
+
+function readFile(filePath, offset = 0, limit = 200) {
+  const resolved = safePath(filePath);
+  const stat = fs.statSync(resolved);
+  const content = fs.readFileSync(resolved, 'utf8');
+  const lines = content.split('\n');
+  const result = {
+    path: resolved, size: stat.size, mtime: stat.mtime.toISOString(),
+    totalLines: lines.length, language: path.extname(resolved).slice(1),
+    lines: lines.slice(offset, offset + limit),
+    truncated: lines.length > offset + limit,
+    offset, limit,
+  };
+  if (path.extname(resolved) === '.md') {
+    const fm = parseFrontmatter(content);
+    result.tags = fm.tags;
+    result.wikilinks = fm.links;
+  }
+  return result;
+}
+
+/** Shared directory walker — reduces duplicated traversal code */
+function walkDir(dir, opts = {}) {
+  const { maxDepth = Infinity, ignore = IGNORED_DIRS, fileTest = null, skipHidden = true } = opts;
+  const files = [];
+  const dirs = [];
+  function walk(d, depth) {
+    if (depth > maxDepth) return;
+    try {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (ignore && (ignore.has(e.name) || (skipHidden && e.name.startsWith('.')))) continue;
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) {
+          dirs.push(full);
+          walk(full, depth + 1);
+        } else if (e.isFile() && (!fileTest || fileTest(e, full))) {
+          files.push(full);
+        }
+      }
+    } catch {}
+  }
+  walk(dir, 0);
+  return { files, dirs };
+}
+
+function searchFiles(query, root = WORKSPACE_ROOT) {
+  const results = [];
+  const q = query.toLowerCase();
+  const { files } = walkDir(root, { maxDepth: 4, fileTest: () => true });
+  for (const full of files) {
+    try {
+      const content = fs.readFileSync(full, 'utf8').toLowerCase();
+      if (content.includes(q)) {
+        results.push({ path: full, name: path.basename(full), size: fs.statSync(full).size });
+      }
+    } catch {}
+  }
+  return results.slice(0, 200);
+}
+
+function getFileTree(root = WORKSPACE_ROOT, depth = 0) {
+  if (depth > 3) return [];
+  const items = [];
+  try {
+    for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+      if (IGNORED_DIRS.has(e.name) || e.name.startsWith('.')) continue;
+      const full = path.join(root, e.name);
+      const node = { name: e.name, path: full.replace(WORKSPACE_ROOT, ''), isDir: e.isDirectory() };
+      if (e.isDirectory()) {
+        node.children = getFileTree(full, depth + 1);
+        if (node.children.length > 0 || depth === 0) items.push(node);
+      } else if (e.isFile() && /\.(md|txt|json|js|ts|tsx|jsx|html|css|yml|yaml|toml|env)$/i.test(e.name)) {
+        try { node.size = fs.statSync(full).size; } catch {}
+        items.push(node);
+      }
+    }
+  } catch {}
+  return items;
+}
+
+function getMemoryFiles() {
+  const memDir = path.join(WORKSPACE_ROOT, 'memory');
+  const results = [];
+  try {
+    for (const e of fs.readdirSync(memDir, { withFileTypes: true })) {
+      if (e.isFile() && e.name.endsWith('.md')) {
+        const stat = fs.statSync(path.join(memDir, e.name));
+        results.push({ name: e.name, path: `/memory/${e.name}`, size: stat.size, mtime: stat.mtime.toISOString() });
+      }
+    }
+  } catch {}
+  // Also MEMORY.md at root
+  try {
+    const stat = fs.statSync(path.join(WORKSPACE_ROOT, 'MEMORY.md'));
+    results.push({ name: 'MEMORY.md', path: '/MEMORY.md', size: stat.size, mtime: stat.mtime.toISOString() });
+  } catch {}
+  results.sort((a, b) => new Date(b.mtime) - new Date(a.mtime));
+  return results;
+}
+
+function getSelfImprovingFiles() {
+  const siDir = path.join(WORKSPACE_ROOT, 'self-improving');
+  const altDir = '/home/admin/self-improving';
+  const results = [];
+  let resolvedDir = siDir;
+  if (!fs.existsSync(siDir) && fs.existsSync(altDir)) resolvedDir = altDir;
+  function walk(dir, prefix = '') {
+    try {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) walk(full, `${prefix}/${e.name}`);
+        else if (e.isFile() && e.name.endsWith('.md')) {
+          const stat = fs.statSync(full);
+          results.push({ name: `${prefix}/${e.name}`, path: full.replace(WORKSPACE_ROOT, ''), size: stat.size, mtime: stat.mtime.toISOString() });
+        }
+      }
+    } catch {}
+  }
+  try { walk(resolvedDir); } catch {}
+  return results;
+}
+
+// ─── GitHub Proxy ────────────────────────────────────────────
+async function githubProxy(req, res, url) {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : '';
+  const ghPath = url.searchParams.get('path');
+  if (!token || !ghPath) return sendJson(res, 400, { error: 'authorization bearer token and path param required' });
+  try {
+    const data = await new Promise((resolve, reject) => {
+      https.get(`https://api.github.com${ghPath}`, {
+        headers: { 'User-Agent': 'AgentDashboard', 'Authorization': `Bearer ${token}`, 'Accept': 'application/vnd.github.v3+json' },
+      }, (res) => {
+        let d = '';
+        res.on('data', c => d += c);
+        res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(d); } });
+      }).on('error', reject);
+    });
+    sendJson(res, 200, data);
+  } catch (err) {
+    sendJson(res, 500, { error: err.message });
+  }
+}
+
+// ─── SSE Endpoint ────────────────────────────────────────────
+function handleSSE(req, res) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive', 'X-Accel-Buffering': 'no',
+  });
+  res.write(`event: connected\ndata: ${JSON.stringify({ timestamp: new Date().toISOString() })}\n\n`);
+
+  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+  const handlerMap = {
+    'cli-output': d => send('cli-output', d), 'cli-exit': d => send('cli-exit', d),
+    'cli-error': d => send('cli-error', d), 'system-event': d => send('system-event', d),
+    'dispatch': d => send('dispatch', d),
+  };
+
+  Object.entries(handlerMap).forEach(([ev, h]) => eventBus.on(ev, h));
+  const keepalive = setInterval(() => res.write(`:ping\n\n`), 15000);
+  req.on('close', () => {
+    Object.entries(handlerMap).forEach(([ev, h]) => eventBus.off(ev, h));
+    clearInterval(keepalive);
+  });
+}
+
+// ─── API Router ──────────────────────────────────────────────
+async function handleApi(req, res, url) {
+  const method = req.method;
+  const pathname = url.pathname;
+
+  if (method === 'GET' && pathname === '/api/config') {
+    if (!requireAuth(req, res)) return;
+    return sendJson(res, 200, {
+      supabaseUrl: DASHBOARD_SUPABASE_URL,
+      supabaseKey: DASHBOARD_SUPABASE_KEY,
+    });
+  }
+
+  // ── SSE ──
+  if (method === 'GET' && pathname === '/api/events') return handleSSE(req, res);
+
+  // ── Chat ──
+  if (method === 'GET' && pathname.startsWith('/api/chat/')) {
+    const agent = decodeURIComponent(pathname.split('/').pop()).toLowerCase();
+    const rows = readMessages().filter(r => String(r.agent_name).toLowerCase() === agent).sort((a, b) => new Date(a.created_at) - new Date(b.created_at)).slice(-200);
+    return sendJson(res, 200, { rows });
+  }
+  if (method === 'POST' && pathname === '/api/chat/send') {
+    try {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const agent = String(payload.agent_name).toLowerCase();
+      const body = String(payload.body || '').trim();
+      if (!AGENT_MAP[agent]) return sendJson(res, 400, { error: `Unknown agent: ${agent}` });
+      if (!body) return sendJson(res, 400, { error: 'Message required' });
+      const outbound = appendMessage({ agent_name: agent, sender: 'operator', body, direction: 'outbound' });
+      let inbound;
+      try {
+        const reply = await runAgent(agent, body);
+        inbound = appendMessage({ agent_name: agent, sender: AGENT_MAP[agent], body: reply, direction: 'inbound' });
+      } catch (err) {
+        inbound = appendMessage({ agent_name: agent, sender: 'system', body: `Failed: ${err.message}`, direction: 'inbound', error: true });
+      }
+      return sendJson(res, 200, { outbound, inbound });
+    } catch (err) { return sendJson(res, 500, { error: err.message }); }
+  }
+
+  if (method === 'POST' && pathname === '/api/dispatch') {
+    try {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const agent = String(payload.agent || '').toLowerCase();
+      const message = String(payload.message || '').trim();
+      const SPECIALISTS = ['alex', 'maya', 'jordan', 'dev', 'sam'];
+      if (!SPECIALISTS.includes(agent)) return sendJson(res, 400, { error: `Unknown agent: ${agent}` });
+      if (!message) return sendJson(res, 400, { error: 'Message required' });
+      runAgent(agent, message).catch(err => console.error(`[dispatch] ${agent}:`, err.message));
+      return sendJson(res, 200, { ok: true, agent, queued: true });
+    } catch (err) { return sendJson(res, 500, { error: err.message }); }
+  }
+
+  // ── CLI ──
+  if (method === 'POST' && pathname === '/api/cli/start') {
+    try {
+      const { type, cwd } = JSON.parse(await readBody(req) || '{}');
+      const id = startCLI(type || 'claude', cwd || WORKSPACE_ROOT);
+      return sendJson(res, 200, { id });
+    } catch (err) { return sendJson(res, 400, { error: err.message }); }
+  }
+  if (method === 'POST' && pathname.match(/^\/api\/cli\/(cli-[^/]+)\/input$/)) {
+    try {
+      const id = pathname.match(/cli-[^/]+/)[0];
+      const { input } = JSON.parse(await readBody(req) || '{}');
+      sendCLIInput(id, input || '');
+      return sendJson(res, 200, { ok: true });
+    } catch (err) { return sendJson(res, 400, { error: err.message }); }
+  }
+  if (method === 'POST' && pathname.match(/^\/api\/cli\/(cli-[^/]+)\/stop$/)) {
+    const id = pathname.match(/cli-[^/]+/)[0];
+    stopCLI(id);
+    return sendJson(res, 200, { ok: true });
+  }
+  if (method === 'GET' && pathname === '/api/cli/sessions') {
+    return sendJson(res, 200, { sessions: getCLISessions() });
+  }
+
+  // ── Files ──
+  if (method === 'POST' && pathname === '/api/files/write') {
+    try {
+      const { file, content } = JSON.parse(await readBody(req) || '{}');
+      if (!file || content === undefined) return sendJson(res, 400, { error: 'file and content required' });
+      const resolved = safePath(file);
+      // Only allow .md files for safety
+      if (!resolved.endsWith('.md')) return sendJson(res, 400, { error: 'Only .md files can be written from dashboard' });
+      fs.writeFileSync(resolved, content, 'utf8');
+      broadcast('file-change', { path: resolved, action: 'write' });
+      return sendJson(res, 200, { ok: true });
+    } catch (err) { return sendJson(res, 400, { error: err.message }); }
+  }
+  if (method === 'POST' && pathname === '/api/files/upload') {
+    try {
+      const ALLOWED_EXT = new Set(['.py','.js','.ts','.txt','.md','.json','.csv','.yaml','.yml','.sh','.sql','.html','.css']);
+      const contentType = req.headers['content-type'] || '';
+      const boundaryMatch = contentType.match(/boundary=([^\s;]+)/);
+      if (!boundaryMatch) return sendJson(res, 400, { error: 'Missing multipart boundary' });
+      const boundary = Buffer.from('--' + boundaryMatch[1]);
+      const buf = await readBodyRaw(req);
+      const parts = splitBuffer(buf, boundary);
+      let uploaded = null;
+      for (const part of parts) {
+        // Skip preamble and epilogue markers
+        if (part.length < 4) continue;
+        const headerEnd = part.indexOf(Buffer.from('\r\n\r\n'));
+        if (headerEnd === -1) continue;
+        const headerStr = part.slice(0, headerEnd).toString('utf8');
+        if (!headerStr.includes('filename=')) continue;
+        const fnMatch = headerStr.match(/filename="([^"]+)"/);
+        if (!fnMatch) continue;
+        const filename = fnMatch[1];
+        // Security: reject path traversal and slashes
+        if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+          return sendJson(res, 400, { error: 'Invalid filename' });
+        }
+        const ext = path.extname(filename).toLowerCase();
+        if (!ALLOWED_EXT.has(ext)) {
+          return sendJson(res, 400, { error: `File type ${ext} not allowed` });
+        }
+        // File body starts after \r\n\r\n, trim trailing \r\n
+        let fileData = part.slice(headerEnd + 4);
+        if (fileData.slice(-2).equals(Buffer.from('\r\n'))) fileData = fileData.slice(0, -2);
+        const uploadDir = path.join(process.env.HOME, 'Vault', 'uploads');
+        fs.mkdirSync(uploadDir, { recursive: true });
+        const destPath = path.join(uploadDir, filename);
+        fs.writeFileSync(destPath, fileData);
+        uploaded = { ok: true, path: 'uploads/' + filename, size: fileData.length };
+        break; // process first file part only
+      }
+      if (!uploaded) return sendJson(res, 400, { error: 'No valid file part found' });
+      return sendJson(res, 200, uploaded);
+    } catch (err) { return sendJson(res, 400, { error: err.message }); }
+  }
+  if (method === 'GET' && pathname === '/api/files/list') {
+    try { return sendJson(res, 200, listDir(url.searchParams.get('path') || '')); }
+    catch (err) { return sendJson(res, 400, { error: err.message }); }
+  }
+  if (method === 'GET' && pathname === '/api/files/read') {
+    try {
+      const filePath = url.searchParams.get('path') || '';
+      const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+      const limit = parseInt(url.searchParams.get('limit') || '200', 10);
+      return sendJson(res, 200, readFile(filePath, offset, Math.min(limit, 500)));
+    } catch (err) { return sendJson(res, 400, { error: err.message }); }
+  }
+  if (method === 'GET' && pathname === '/api/files/search') {
+    try { return sendJson(res, 200, { results: searchFiles(url.searchParams.get('q') || '') }); }
+    catch (err) { return sendJson(res, 400, { error: err.message }); }
+  }
+  if (method === 'GET' && pathname === '/api/files/tree') {
+    try { return sendJson(res, 200, { tree: getFileTree() }); }
+    catch (err) { return sendJson(res, 400, { error: err.message }); }
+  }
+
+  if (method === 'GET' && pathname === '/api/files/tags') {
+    try {
+      const { files } = walkDir(WORKSPACE_ROOT, { maxDepth: 4, fileTest: e => e.name.endsWith('.md') });
+      const tagMap = {}; // tag → [relpath, ...]
+      for (const f of files) {
+        try {
+          const content = fs.readFileSync(f, 'utf8');
+          const rel = path.relative(WORKSPACE_ROOT, f);
+          const fm = parseFrontmatter(content);
+          fm.tags.forEach(t => { (tagMap[t] = tagMap[t] || []).push(rel); });
+        } catch {}
+      }
+      return sendJson(res, 200, tagMap);
+    } catch(err) { return sendJson(res, 400, { error: err.message }); }
+  }
+
+  // ── Memory ──
+  if (method === 'GET' && pathname === '/api/memory/list') {
+    return sendJson(res, 200, { files: getMemoryFiles() });
+  }
+  if (method === 'GET' && pathname.startsWith('/api/memory/read')) {
+    try {
+      const p = url.searchParams.get('path') || '';
+      const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+      const limit = parseInt(url.searchParams.get('limit') || '200', 10);
+      return sendJson(res, 200, readFile(p, offset, Math.min(limit, 500)));
+    } catch (err) { return sendJson(res, 400, { error: err.message }); }
+  }
+
+  // ── Self-Improving ──
+  if (method === 'GET' && pathname === '/api/learning/list') {
+    return sendJson(res, 200, { files: getSelfImprovingFiles() });
+  }
+
+  // ── System Status ──
+  if (method === 'GET' && pathname === '/healthz') {
+    const checks = {};
+    const t0 = Date.now();
+    // Supabase
+    if (DASHBOARD_SUPABASE_URL && DASHBOARD_SUPABASE_KEY) {
+      try {
+        await fetchUrl(`${DASHBOARD_SUPABASE_URL}/rest/v1/agent_logs?limit=1`, {
+          'apikey': DASHBOARD_SUPABASE_KEY, 'Authorization': `Bearer ${DASHBOARD_SUPABASE_KEY}`,
+        });
+        checks.supabase = { ok: true, latencyMs: Date.now() - t0 };
+      } catch(e) { checks.supabase = { ok: false, error: e.message }; }
+    } else { checks.supabase = { ok: false, error: 'no credentials' }; }
+    // Alpaca
+    if (alpaca) {
+      try { await alpaca.getAccount(); checks.alpaca = { ok: true, latencyMs: Date.now() - t0 }; }
+      catch(e) { checks.alpaca = { ok: false, error: e.message }; }
+    } else { checks.alpaca = { ok: false, error: 'no credentials' }; }
+    // OpenRouter — test with a real completion probe, not just auth/key
+    if (OPENROUTER_API_KEY) {
+      try {
+        const t1 = Date.now();
+        await callLLM('say ok', 'ok', 'anthropic/claude-haiku-4-5');
+        checks.openrouter = { ok: true, latencyMs: Date.now() - t1 };
+      } catch(e) { checks.openrouter = { ok: false, error: e.message }; }
+    } else { checks.openrouter = { ok: false, error: 'no key' }; }
+    const allOk = Object.values(checks).every(c => c.ok);
+    return sendJson(res, allOk ? 200 : 207, { ok: allOk, checks, uptime: process.uptime(), ts: new Date().toISOString() });
+  }
+
+  if (method === 'GET' && pathname === '/api/status') {
+    return sendJson(res, 200, {
+      dashboard: 'ok', claudeAvailable: true, codexAvailable: true,
+      workspace: WORKSPACE_ROOT, activeCLISessions: CLI_SESSIONS.size,
+      uptime: process.uptime(), memory: process.memoryUsage().rss,
+    });
+  }
+
+  if (method === 'GET' && pathname === '/api/status/docker') {
+    const services = [];
+    // Node process itself
+    services.push({ name: 'dashboard', status: 'running', detail: `up ${Math.floor(process.uptime())}s` });
+    // CLI sessions
+    services.push({ name: 'cli-sessions', status: CLI_SESSIONS.size > 0 ? 'running' : 'idle', detail: `${CLI_SESSIONS.size} active` });
+    // openclaw gateway — try non-blocking; skip if binary not found
+    await new Promise(resolve => {
+      execFile(OPENCLAW_BIN, ['gateway', 'status', '--json'], { timeout: 4000 }, (err, stdout) => {
+        try {
+          if (!err && stdout) {
+            const data = JSON.parse(stdout.trim());
+            const containers = Array.isArray(data) ? data : (data.services || data.containers || []);
+            containers.forEach(c => services.push({ name: c.name || c.service || 'container', status: (c.status || c.state || '').toLowerCase().includes('running') ? 'running' : 'stopped', detail: c.status || c.state || '' }));
+          } else if (!err) {
+            services.push({ name: 'openclaw-gateway', status: 'running', detail: 'up' });
+          } else {
+            services.push({ name: 'openclaw-gateway', status: 'unknown', detail: 'not reachable' });
+          }
+        } catch { services.push({ name: 'openclaw-gateway', status: 'unknown', detail: 'parse error' }); }
+        resolve();
+      });
+    }).catch(() => services.push({ name: 'openclaw-gateway', status: 'unknown', detail: 'error' }));
+    // DATA_DIR accessible?
+    try { fs.readdirSync(DATA_DIR); services.push({ name: 'data-dir', status: 'running', detail: 'writable' }); }
+    catch { services.push({ name: 'data-dir', status: 'stopped', detail: 'not found' }); }
+    return sendJson(res, 200, { services });
+  }
+
+  // ── Agent Logs ──
+  // ── GitHub Proxy ──
+  if (method === 'GET' && pathname === '/api/github') {
+    return githubProxy(req, res, url);
+  }
+
+  // ── Agent Config ──────────────────────────────────────────────
+  if (pathname === '/api/config/agents') {
+    if (method === 'GET') return sendJson(res, 200, getAgentConfig());
+    if (method === 'POST') {
+      try {
+        const agents = JSON.parse(await readBody(req));
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        fs.writeFileSync(path.join(DATA_DIR, 'agents.json'), JSON.stringify(agents, null, 2));
+        return sendJson(res, 200, { ok: true });
+      } catch(e) { return sendJson(res, 400, { error: e.message }); }
+    }
+  }
+  if (method === 'PATCH' && pathname.startsWith('/api/config/agents/')) {
+    const agentId = pathname.split('/').pop();
+    try {
+      const patch = JSON.parse(await readBody(req));
+      const agents = getAgentConfig();
+      const idx = agents.findIndex(a => a.id === agentId);
+      if (idx === -1) return sendJson(res, 404, { error: 'agent not found' });
+      agents[idx] = { ...agents[idx], ...patch };
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(path.join(DATA_DIR, 'agents.json'), JSON.stringify(agents, null, 2));
+      return sendJson(res, 200, agents[idx]);
+    } catch(e) { return sendJson(res, 400, { error: e.message }); }
+  }
+
+  if (pathname === '/api/config/team') {
+    const agents = getAgentConfig();
+    let mission = '';
+    try { mission = (fs.readFileSync(path.join(WORKSPACE_ROOT, 'SOUL.md'), 'utf8').match(/mission[:\s]+(.+)/i) || [])[1] || ''; } catch {}
+    return sendJson(res, 200, { agents, mission });
+  }
+
+  // ── Projects ──────────────────────────────────────────────────
+  if (pathname === '/api/projects') {
+    if (method === 'GET') return sendJson(res, 200, stores.projects.all());
+    if (method === 'POST') {
+      try { return sendJson(res, 200, stores.projects.append(JSON.parse(await readBody(req)))); }
+      catch(e) { return sendJson(res, 400, { error: e.message }); }
+    }
+  }
+  if (method === 'PATCH' && pathname.startsWith('/api/projects/')) {
+    const id = pathname.split('/').pop();
+    try { const r = stores.projects.patch(id, JSON.parse(await readBody(req))); return sendJson(res, r ? 200 : 404, r || { error: 'not found' }); }
+    catch(e) { return sendJson(res, 400, { error: e.message }); }
+  }
+  if (method === 'DELETE' && pathname.startsWith('/api/projects/')) {
+    const id = pathname.split('/').pop();
+    return sendJson(res, 200, { ok: stores.projects.remove(id) });
+  }
+
+  // ── Goals ─────────────────────────────────────────────────────
+  if (pathname === '/api/goals') {
+    if (method === 'GET') return sendJson(res, 200, stores.goals.all());
+    if (method === 'POST') {
+      try { return sendJson(res, 200, stores.goals.append(JSON.parse(await readBody(req)))); }
+      catch(e) { return sendJson(res, 400, { error: e.message }); }
+    }
+  }
+  if (method === 'PATCH' && pathname.startsWith('/api/goals/')) {
+    const id = pathname.split('/').pop();
+    try { const r = stores.goals.patch(id, JSON.parse(await readBody(req))); return sendJson(res, r ? 200 : 404, r || { error: 'not found' }); }
+    catch(e) { return sendJson(res, 400, { error: e.message }); }
+  }
+
+  // ── Cron Jobs ─────────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/cron-jobs') {
+    return sendJson(res, 200, getCronJobs());
+  }
+
+  // ── Tasks ─────────────────────────────────────────────────────
+  if (pathname === '/api/tasks') {
+    if (method === 'GET') return sendJson(res, 200, stores.tasks.all().reverse());
+    if (method === 'POST') {
+      try { return sendJson(res, 200, stores.tasks.append(JSON.parse(await readBody(req)))); }
+      catch(e) { return sendJson(res, 400, { error: e.message }); }
+    }
+  }
+  if (method === 'PATCH' && pathname.startsWith('/api/tasks/')) {
+    const id = pathname.split('/').pop();
+    try { const r = stores.tasks.patch(id, JSON.parse(await readBody(req))); return sendJson(res, r ? 200 : 404, r || { error: 'not found' }); }
+    catch(e) { return sendJson(res, 400, { error: e.message }); }
+  }
+  if (method === 'DELETE' && pathname.startsWith('/api/tasks/')) {
+    const id = pathname.split('/').pop();
+    return sendJson(res, 200, { ok: stores.tasks.remove(id) });
+  }
+
+  // ── Content Engine ────────────────────────────────────────────
+  if (pathname === '/api/content/ideas') {
+    if (method === 'GET') return sendJson(res, 200, stores.contentIdeas.all());
+    if (method === 'POST') {
+      try { return sendJson(res, 200, stores.contentIdeas.append(JSON.parse(await readBody(req)))); }
+      catch(e) { return sendJson(res, 400, { error: e.message }); }
+    }
+  }
+  if (method === 'PATCH' && pathname.startsWith('/api/content/ideas/')) {
+    const id = pathname.split('/').pop();
+    try {
+      const updates = JSON.parse(await readBody(req));
+      const r = stores.contentIdeas.patch(id, updates);
+      if (r && updates.status === 'approved') {
+        stores.contentVideos.append({ idea_id: r.id, title: r.title, description: r.summary || '', script_outline: '', tags: [], record_date: null, publish_date: null, status: 'draft' });
+      }
+      return sendJson(res, r ? 200 : 404, r || { error: 'not found' });
+    } catch(e) { return sendJson(res, 400, { error: e.message }); }
+  }
+  if (pathname === '/api/content/videos') {
+    if (method === 'GET') return sendJson(res, 200, stores.contentVideos.all());
+    if (method === 'POST') {
+      try { return sendJson(res, 200, stores.contentVideos.append(JSON.parse(await readBody(req)))); }
+      catch(e) { return sendJson(res, 400, { error: e.message }); }
+    }
+  }
+  if (method === 'PATCH' && pathname.startsWith('/api/content/videos/')) {
+    const id = pathname.split('/').pop();
+    try { const r = stores.contentVideos.patch(id, JSON.parse(await readBody(req))); return sendJson(res, r ? 200 : 404, r || { error: 'not found' }); }
+    catch(e) { return sendJson(res, 400, { error: e.message }); }
+  }
+  if (method === 'GET' && pathname === '/api/content/analytics') {
+    const analyticsFile = path.join(DATA_DIR, 'youtube-analytics.json');
+    const data = fs.existsSync(analyticsFile) ? readJsonFile(analyticsFile) : {};
+    return sendJson(res, 200, data);
+  }
+
+  // ── Trading ───────────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/trading/quote') {
+    const ticker = url.searchParams.get('ticker') || '';
+    if (!ticker) return sendJson(res, 400, { error: 'ticker required' });
+    try { return sendJson(res, 200, await yahooQuote(ticker)); }
+    catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+  if (method === 'GET' && pathname === '/api/trading/quotes') {
+    const tickers = (url.searchParams.get('tickers') || '').split(',').map(t=>t.trim()).filter(Boolean);
+    if (!tickers.length) return sendJson(res, 400, { error: 'tickers required' });
+    try {
+      const results = await Promise.allSettled(tickers.map(t => yahooQuote(t)));
+      return sendJson(res, 200, results.map((r,i) => r.status === 'fulfilled' ? r.value : { ticker: tickers[i], error: r.reason?.message }));
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+  if (method === 'GET' && pathname === '/api/trading/macro') {
+    try {
+      const [spy, vix, t10y, dxy] = await Promise.allSettled([
+        yahooQuote('SPY'), yahooQuote('^VIX'), fredSeries('DGS10'), yahooQuote('DX-Y.NYB')
+      ]);
+      return sendJson(res, 200, {
+        spy:  spy.status  === 'fulfilled' ? spy.value  : null,
+        vix:  vix.status  === 'fulfilled' ? vix.value  : null,
+        t10y: t10y.status === 'fulfilled' ? t10y.value : null,
+        dxy:  dxy.status  === 'fulfilled' ? dxy.value  : null,
+      });
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+  if (method === 'GET' && pathname === '/api/trading/session-intel') {
+    try {
+      const [spy, qqq, iwm] = await Promise.allSettled([
+        yahooQuote('SPY'), yahooQuote('QQQ'), yahooQuote('IWM')
+      ]);
+      const indexes = [
+        spy.status === 'fulfilled' ? spy.value : null,
+        qqq.status === 'fulfilled' ? qqq.value : null,
+        iwm.status === 'fulfilled' ? iwm.value : null
+      ].filter(Boolean);
+
+      // Real session highs/lows from user's watchlist
+      const wl = stores.watchlist.all().slice(0, 30);
+      const wlTickers = wl.map(w => (w.ticker || w.symbol || '').toUpperCase()).filter(Boolean);
+      let newHighs = [], newLows = [];
+      if (wlTickers.length) {
+        const quotes = await Promise.allSettled(wlTickers.map(t => yahooQuote(t)));
+        quotes.forEach((q) => {
+          if (q.status !== 'fulfilled') return;
+          const d = q.value;
+          const price = d.price;
+          const dayH = d.day_high || d.high_52w;
+          const dayL = d.day_low  || d.low_52w;
+          const chg = parseFloat(d.change_pct || 0);
+          const inWatch = wlTickers.includes(d.ticker.toUpperCase());
+          const is52wH = d.high_52w && price >= d.high_52w * 0.995;
+          const is52wL = d.low_52w && price <= d.low_52w * 1.005;
+          const bigMove = Math.abs(chg) >= 3.0;
+          if (dayH && price >= dayH * 0.998) newHighs.push({ ticker: d.ticker, chg, inWatch, is52wH, bigMove });
+          if (dayL && price <= dayL * 1.002) newLows.push({ ticker: d.ticker, chg, inWatch, is52wL, bigMove });
+        });
+      }
+      newHighs = newHighs.sort((a,b)=>b.chg-a.chg).slice(0,6);
+      newLows  = newLows.sort((a,b)=>a.chg-b.chg).slice(0,6);
+
+      // Persist new high/low events for session flow (HighLowTicker style)
+      const now = Date.now();
+      [...newHighs.map(h => ({...h, type:'high'})), ...newLows.map(l => ({...l, type:'low'}))].forEach(ev => {
+        stores.sessionHL.append({
+          ts: now,
+          ticker: ev.ticker,
+          type: ev.type,
+          chg: ev.chg
+        });
+      });
+      const recentHL = stores.sessionHL.all().slice(-12).reverse(); // last 12 events, newest first
+
+      // Real velocity: average absolute % change over recent closes windows
+      // (uses the 30-period history already fetched by yahooQuote)
+      function velocityScore(closes, n) {
+        if (!closes || closes.length < n + 1) return Math.floor(20 + Math.random() * 15);
+        let sum = 0, count = 0;
+        for (let i = closes.length - n; i < closes.length; i++) {
+          if (closes[i-1] && closes[i]) {
+            const pct = Math.abs((closes[i] - closes[i-1]) / closes[i-1] * 100);
+            sum += pct; count++;
+          }
+        }
+        return count ? Math.round(sum / count * 10) : 25;
+      }
+      const vel = indexes.length && indexes[0].closes
+        ? {
+            '30s': velocityScore(indexes[0].closes, 3),
+            '1m':  velocityScore(indexes[0].closes, 6),
+            '5m':  velocityScore(indexes[0].closes, 12),
+            '20m': velocityScore(indexes[0].closes, 20)
+          }
+        : { '30s': 28, '1m': 31, '5m': 22, '20m': 19 };
+
+      // Smarter regime detection (velocity + high/low pressure)
+      const hlRate = (newHighs.length + newLows.length) / Math.max(1, wlTickers.length);
+      const v30 = vel['30s'] || 25;
+      let regime = 'Normal';
+      if (v30 > 55 && hlRate > 0.25) regime = 'BreakoutBullish';
+      else if (v30 > 45 && newHighs.length > newLows.length) regime = 'AcceleratingUp';
+      else if (v30 < 20 && hlRate < 0.1) regime = 'LowVolatility';
+      else if (newLows.length > newHighs.length * 1.5) regime = 'Choppy';
+      const throughput = Math.floor(30 + v30 * 0.6);
+      const momentum = newHighs.length > newLows.length ? `+${Math.min(18, newHighs.length * 3)}%` : `-${Math.min(15, newLows.length * 4)}%`;
+
+      // Volume spike detection (HighLowTicker entry highlight)
+      let volumeSpikes = [];
+      if (wlTickers.length) {
+        const quotes = await Promise.allSettled(wlTickers.map(t => yahooQuote(t)));
+        const vols = quotes.filter(q => q.status === 'fulfilled').map(q => q.value.volume || 0);
+        if (vols.length) {
+          const avgVol = vols.reduce((a,b)=>a+b,0) / vols.length;
+          quotes.forEach((q,i) => {
+            if (q.status === 'fulfilled' && q.value.volume > avgVol * 2.5) {
+              volumeSpikes.push({ ticker: q.value.ticker, vol: q.value.volume, ratio: (q.value.volume / avgVol).toFixed(1) });
+            }
+          });
+        }
+      }
+      volumeSpikes = volumeSpikes.slice(0,4);
+
+      return sendJson(res, 200, {
+        indexes,
+        regime,
+        throughput: `${throughput} Hz`,
+        momentum,
+        velocity: vel,
+        newHighs,
+        newLows,
+        recentHL,
+        watchlistTickers: wlTickers,
+        volumeSpikes,
+        // Broker streaming extension point (activate when credentials present)
+        broker: {
+          connected: false,
+          name: 'Yahoo (delayed)',
+          note: 'Real-time tick stream available via Schwab / Tradier / Tastytrade / Polygon'
+        },
+        alerts: {
+          burst: v30 > 60,
+          spike: v30 > 75,
+          pop:   hlRate > 0.35 && v30 > 50
+        }
+      });
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+
+  if (method === 'GET' && pathname === '/api/trading/global') {
+    try {
+      const [axjo, aud, btc, eth, sol, xrp] = await Promise.allSettled([
+        yahooQuote('^AXJO'), yahooQuote('AUDUSD=X'),
+        yahooQuote('BTC-USD'), yahooQuote('ETH-USD'), yahooQuote('SOL-USD'), yahooQuote('XRP-USD')
+      ]);
+      const pick = r => r.status === 'fulfilled' ? r.value : null;
+      return sendJson(res, 200, {
+        aus: { axjo: pick(axjo), aud: pick(aud) },
+        crypto: { btc: pick(btc), eth: pick(eth), sol: pick(sol), xrp: pick(xrp) }
+      });
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+
+  if (method === 'GET' && pathname === '/api/trading/session-hl-history') {
+    try {
+      const all = stores.sessionHL.all().slice(-200);
+      return sendJson(res, 200, { events: all });
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+
+  if (method === 'GET' && pathname === '/api/reddit') {
+    const redditUrl = url.searchParams.get('url') || '';
+    if (!redditUrl) return sendJson(res, 400, { error: 'url required' });
+    try {
+      const apiUrl = redditUrl
+        .replace('www.reddit.com', 'old.reddit.com')
+        .replace(/\/?(\?.*)?$/, '.json$1');
+      const data = await withCache(`reddit:${apiUrl}`, 300000, () =>
+        fetchUrl(apiUrl, { 'User-Agent': 'Mozilla/5.0 (compatible; AlgoBot/1.0)' })
+      );
+      if (!Array.isArray(data)) return sendJson(res, 500, { error: 'unexpected response' });
+      const post = data[0]?.data?.children?.[0]?.data || {};
+      const comments = (data[1]?.data?.children || [])
+        .filter(c => c.kind === 't1')
+        .slice(0, 10)
+        .map(c => ({ author: c.data.author, body: c.data.body?.slice(0, 500), score: c.data.score }));
+      return sendJson(res, 200, {
+        title: post.title || '',
+        author: post.author || '',
+        text: post.selftext || '',
+        score: post.score || 0,
+        url: post.url || '',
+        created: post.created_utc || 0,
+        comments
+      });
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+
+  // Beginner Educational Guide Chat (connected to OpenClaw)
+  if (method === 'POST' && pathname === '/api/trading/guide-chat') {
+    try {
+      const body = JSON.parse(await readBody(req));
+      const question = body.question || '';
+      const useAgent = !!body.useAgent;
+      const q = question.toLowerCase();
+
+      // Pull live data we already have
+      const intel = await (async () => {
+        try {
+          const r = await fetchUrl(`http://localhost:${PORT}/api/trading/session-intel`);
+          return r;
+        } catch { return null; }
+      })();
+
+      const watchlist = stores.watchlist.all().slice(0, 10);
+      const wlTickers = watchlist.map(w => w.ticker || w.symbol).filter(Boolean);
+
+      let answer = '';
+
+      if (q.includes('safe') || q.includes('invest') || q.includes('worth') || q.includes('buy') || q.includes('money')) {
+        answer = `This is very important: There is no “safe” investment that guarantees money. Every investment carries risk of loss.\n\n` +
+                 `Right now the dashboard shows real market movement (highs, lows, volume). Use it only to learn.\n` +
+                 `Recommended first steps:\n` +
+                 `1. Watch 3–5 companies you already understand for several weeks.\n` +
+                 `2. Learn what “price”, “volume”, and “index” mean.\n` +
+                 `3. Never put in money you need for rent, food, or emergencies.\n\n` +
+                 `The data you see (new highs, volume spikes, etc.) is information, not a prediction or recommendation.`;
+      }
+      else if (q.includes('high') || q.includes('low')) {
+        answer = `New highs and lows show which stocks are moving strongly today.\n` +
+                 `A “new high” means the price is higher than it has been all session (or year for 52-week high).\n` +
+                 `This is just data. It does not mean the stock will keep going up.`;
+      }
+      else if (q.includes('volume')) {
+        answer = `Volume = how many shares are traded. A volume spike means much more activity than normal.\n` +
+                 `It can show strong interest or panic. It is not a signal to buy or sell by itself.`;
+      }
+      else if (q.includes('watchlist')) {
+        answer = `Your watchlist currently has: ${wlTickers.length ? wlTickers.join(', ') : 'no tickers yet'}.\n` +
+                 `Add companies you understand and watch them daily. This helps you learn how prices move.`;
+      }
+      else if (q.includes('predict') || q.includes('future') || q.includes('will go up')) {
+        answer = `No one can reliably predict the future price of any stock.\n` +
+                 `The dashboard shows what is happening right now, not what will happen tomorrow.\n` +
+                 `Any “prediction” you see is just an observation of current data, never a guarantee.`;
+      }
+      else {
+        answer = `Thanks for your question. The best way to learn is to watch the live numbers every day and read simple explanations.\n` +
+                 `Try asking about “volume”, “new highs”, or “safe first steps”.`;
+      }
+
+      try {
+      // === DEEP META RESEARCH ENGINE v3 (self-referential + learning path + follow-ups) ===
+      const liveContext = {
+        regime: regime || 'Normal',
+        recentHighs: (newHighs || []).slice(0, 5),
+        volumeSpikes: (volumeSpikes || []).slice(0, 5),
+        watchlist: wlTickers.slice(0, 10),
+        throughput: throughput || '—'
+      };
+
+      // Self-referential memory: load user's previous questions
+      const pastResearch = stores.guideResearch.all().slice(-5);
+      const memorySummary = pastResearch.length > 0
+        ? `User previously asked: ${pastResearch.map(r => r.question).join(' | ')}`
+        : 'First deep research question from this user.';
+
+      // Meta Layer 1: Agent designs its own research plan (aware of history)
+      const metaPlanPrompt = `Design a 7-step research plan for a complete beginner with low income.\n` +
+                             `Memory: ${memorySummary}\nQuestion: "${question}"\nContext: ${JSON.stringify(liveContext)}\n` +
+                             `Output only the numbered plan.`;
+      const metaPlan = await runAgent('alex', metaPlanPrompt);
+
+      // Meta Layer 2: First draft
+      let draft1 = await runAgent('alex', `Follow this plan:\n${metaPlan}\n\nQuestion: ${question}`);
+
+      // Meta Layer 3: Self-critique
+      const critique1 = await runAgent('alex', `Critique this draft for a total beginner:\n${draft1}\nReturn problems + improved version.`);
+
+      // Meta Layer 4: Revised draft
+      let draft2 = await runAgent('alex', `Apply improvements:\n${critique1}`);
+
+      // Meta Layer 5: Safety & clarity final check
+      const finalMeta = await runAgent('alex', `Final safety check for a poor beginner. Fix and output final answer:\n${draft2}`);
+
+      // Meta Layer 6: Generate personalized learning path + suggested follow-up questions
+      const learningPrompt = `Based on "${question}" and past questions, create:\n` +
+                             `1. "Next topics you should learn" (3 items)\n` +
+                             `2. Two good follow-up questions the user should ask\n` +
+                             `Keep it encouraging and realistic.`;
+      const learningPath = await runAgent('alex', learningPrompt);
+
+      answer = `${finalMeta || draft2 || draft1}\n\n---\n**Your personal learning path & next questions:**\n${learningPath}`;
+
+      // Store full meta-trace
+      stores.guideResearch.append({
+        ts: Date.now(),
+        question,
+        context: liveContext,
+        plan: (metaPlan || '').slice(0, 600),
+        final: answer.slice(0, 2200)
+      });
+    } catch (agentErr) {
+      answer += `\n\n[Deep meta research hit an error — safe fallback used]`;
+    }
+
+      return sendJson(res, 200, {
+        answer,
+        disclaimer: 'This is educational information only. It is NOT financial advice. Past performance does not predict future results. Only invest what you can afford to lose.'
+      });
+    } catch (e) {
+      return sendJson(res, 200, {
+        answer: 'Sorry, I could not process that question. Please try again or use the quick buttons.',
+        disclaimer: 'Educational use only.'
+      });
+    }
+  }
+
+  // Meta research history endpoint
+  if (method === 'GET' && pathname === '/api/trading/guide-research') {
+    return sendJson(res, 200, stores.guideResearch.all().slice(-25).reverse());
+  }
+
+  // Real Risk Engine status (production path)
+  if (method === 'GET' && pathname === '/api/trading/risk/status') {
+    try {
+      // Lazy init risk engine on first call
+      if (!globalThis._riskEngine) {
+        const { createTradingSystem } = require('../trading');
+        globalThis._riskEngine = createTradingSystem().risk;
+      }
+      return sendJson(res, 200, globalThis._riskEngine.getStatus());
+    } catch (e) {
+      return sendJson(res, 500, { error: e.message });
+    }
+  }
+
+  if (method === 'POST' && pathname === '/api/trading/risk/config') {
+    try {
+      if (!globalThis._riskEngine) {
+        const { createTradingSystem } = require('../trading');
+        globalThis._riskEngine = createTradingSystem().risk;
+      }
+      if (!globalThis._riskEngine?.config) {
+        return sendJson(res, 503, { error: 'Risk engine not initialized' });
+      }
+      const updates = await readBody(req);
+      const parsed = JSON.parse(updates);
+      // Update config on the engine
+      Object.assign(globalThis._riskEngine.config, parsed);
+      log.info('Risk config updated via API', { updates: parsed });
+      return sendJson(res, 200, { ok: true, config: globalThis._riskEngine.config });
+    } catch (e) {
+      return sendJson(res, 500, { error: e.message });
+    }
+  }
+
+  if (method === 'POST' && pathname === '/api/trading/risk/update') {
+    try {
+      if (!globalThis._riskEngine) {
+        const { createTradingSystem } = require('../trading');
+        globalThis._riskEngine = createTradingSystem().risk;
+      }
+      const body = await readBody(req);
+      const parsed = JSON.parse(body);
+      if (!parsed || typeof parsed.capital !== 'number' || parsed.capital <= 0) {
+        return sendJson(res, 400, { error: 'capital must be a positive number' });
+      }
+      globalThis._riskEngine.updatePortfolio({
+        capital: parsed.capital,
+        openPositions: parsed.openPositions,
+        dailyPnL: parsed.dailyPnL
+      });
+      log.info('Risk portfolio updated via API', { capital: parsed.capital, openPositions: parsed.openPositions, dailyPnL: parsed.dailyPnL });
+      return sendJson(res, 200, globalThis._riskEngine.getStatus());
+    } catch (e) {
+      return sendJson(res, 500, { error: e.message });
+    }
+  }
+
+  if (method === 'GET' && pathname === '/api/trading/risk/calculate-size') {
+    try {
+      if (!globalThis._riskEngine) {
+        const { createTradingSystem } = require('../trading');
+        globalThis._riskEngine = createTradingSystem().risk;
+      }
+      const entryPrice = parseFloat(url.searchParams.get('entryPrice'));
+      const stopLoss = parseFloat(url.searchParams.get('stopLoss'));
+      const capital = url.searchParams.has('capital') ? parseFloat(url.searchParams.get('capital')) : undefined;
+      if (!entryPrice || !stopLoss || entryPrice <= 0 || stopLoss <= 0) {
+        return sendJson(res, 400, { error: 'entryPrice and stopLoss are required positive numbers' });
+      }
+      const shares = globalThis._riskEngine.calculatePositionSize({ entryPrice, stopLoss, capital });
+      return sendJson(res, 200, { shares, entryPrice, stopLoss, capital: capital ?? null });
+    } catch (e) {
+      return sendJson(res, 500, { error: e.message });
+    }
+  }
+
+  if (method === 'GET' && pathname === '/api/trading/earnings') {
+    const tickers = (url.searchParams.get('tickers') || '').split(',').map(t=>t.trim()).filter(Boolean);
+    try {
+      const results = await Promise.allSettled(tickers.map(t => yahooEarnings(t)));
+      return sendJson(res, 200, results.filter(r=>r.status==='fulfilled').map(r=>r.value));
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+  if (method === 'GET' && pathname === '/api/trading/news') {
+    const ticker = url.searchParams.get('ticker') || '';
+    const avKey  = AV_API_KEY || readJsonFile(TR_SETTINGS_FILE).alpha_vantage_key || '';
+    if (!avKey) return sendJson(res, 200, { items: [], note: 'Alpha Vantage key not configured' });
+    try {
+      const data = await withCache(`avnews:${ticker}`, 600000, () =>
+        fetchUrl(`https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers=${ticker}&apikey=${avKey}&limit=20`)
+      );
+      const items = (data?.feed || []).slice(0, 20).map(n => ({
+        title: n.title, summary: n.summary, url: n.url,
+        sentiment_score: n.overall_sentiment_score,
+        sentiment_label: n.overall_sentiment_label,
+        published_at: n.time_published,
+        source: n.source,
+        ticker_sentiments: (n.ticker_sentiment || []).filter(ts => ts.ticker === ticker),
+      }));
+      return sendJson(res, 200, { items });
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+
+  if (method === 'GET' && pathname.startsWith('/api/trading/fundamentals/')) {
+    const ticker = decodeURIComponent(pathname.split('/').pop()).toUpperCase();
+    const avKey = AV_API_KEY || readJsonFile(TR_SETTINGS_FILE).alpha_vantage_key || '';
+    if (!avKey) return sendJson(res, 200, { note: 'Alpha Vantage key not configured' });
+    try {
+      const data = await withCache(`fundamentals:${ticker}`, 3600000, () =>
+        fetchUrl(`https://www.alphavantage.co/query?function=OVERVIEW&symbol=${ticker}&apikey=${avKey}`)
+      );
+      if (data.Note || data.Information || !data.Symbol) {
+        return sendJson(res, 200, { ticker, note: data.Note || data.Information || 'No data returned', rate_limited: true });
+      }
+      return sendJson(res, 200, {
+        ticker,
+        pe_ttm:            parseFloat(data.TrailingPE) || null,
+        ev_ebitda:         parseFloat(data.EVToEBITDA) || null,
+        eps_ttm:           parseFloat(data.EPS) || null,
+        revenue_ttm:       parseFloat(data.RevenueTTM) || null,
+        profit_margin:     parseFloat(data.ProfitMargin) || null,
+        short_ratio:       parseFloat(data.ShortRatio) || null,
+        shares_short:      parseFloat(data.SharesShort) || null,
+        beta:              parseFloat(data.Beta) || null,
+        market_cap:        parseFloat(data.MarketCapitalization) || null,
+        high_52w:          parseFloat(data['52WeekHigh']) || null,
+        low_52w:           parseFloat(data['52WeekLow']) || null,
+        analyst_target:    parseFloat(data.AnalystTargetPrice) || null,
+        sector:            data.Sector || null,
+        industry:          data.Industry || null,
+        description:       data.Description || null,
+      });
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+
+  // ── Why Engine ──────────────────────────────────────────────
+  if (method === 'GET' && pathname.startsWith('/api/trading/why/')) {
+    const ticker = decodeURIComponent(pathname.split('/').pop()).toUpperCase();
+    try {
+      const since24h = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+      const avKey = AV_API_KEY || readJsonFile(TR_SETTINGS_FILE).alpha_vantage_key || '';
+      const [newsRes, quoteRes, macroRes, avNewsRes] = await Promise.allSettled([
+        alpaca ? alpaca.getNews([ticker], 15, since24h) : Promise.resolve({ news: [] }),
+        alpaca ? alpaca.getSnapshot(ticker)             : Promise.resolve(null),
+        Promise.allSettled([yahooQuote('SPY'), yahooQuote('^VIX')]),
+        avKey
+          ? withCache(`avnews:${ticker}`, 600000, () =>
+              fetchUrl(`https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers=${ticker}&apikey=${avKey}&limit=20`))
+          : Promise.resolve(null),
+      ]);
+
+      // Merge Alpaca + AV news, deduplicated by URL
+      const alpacaNews = (newsRes.value?.news || []).slice(0, 10);
+      const avFeed = (avNewsRes.value?.feed || []).slice(0, 10);
+      const seenUrls = new Set(alpacaNews.map(n => n.url));
+      const mergedNews = [
+        ...alpacaNews.map(n => ({ headline: n.headline, source: n.source, url: n.url, sentiment: null })),
+        ...avFeed.filter(n => !seenUrls.has(n.url)).map(n => ({
+          headline: n.title, source: n.source, url: n.url,
+          sentiment: n.overall_sentiment_label,
+          sentiment_score: n.overall_sentiment_score,
+        })),
+      ].slice(0, 15);
+
+      // AV aggregate sentiment for this ticker
+      const tickerSentiments = avFeed.flatMap(n => n.ticker_sentiment || []).filter(ts => ts.ticker === ticker);
+      const avgSentScore = tickerSentiments.length
+        ? (tickerSentiments.reduce((s, ts) => s + parseFloat(ts.ticker_sentiment_score || 0), 0) / tickerSentiments.length).toFixed(3)
+        : null;
+      const sentLabel = avgSentScore !== null
+        ? (avgSentScore > 0.15 ? 'Bullish' : avgSentScore < -0.15 ? 'Bearish' : 'Neutral')
+        : null;
+
+      const articles = mergedNews.map(n =>
+        `• ${n.headline} (${n.source})${n.sentiment ? ` [${n.sentiment}]` : ''}`
+      ).join('\n');
+
+      const snap = quoteRes.value;
+      const price     = snap?.latestTrade?.p || snap?.latestQuote?.bp || 'N/A';
+      const prevClose = snap?.prevDailyBar?.c || 'N/A';
+      const pctChange = (prevClose && prevClose !== 'N/A' && price !== 'N/A')
+        ? (((price - prevClose) / prevClose) * 100).toFixed(2) + '%'
+        : 'N/A';
+      const spyVal  = macroRes.value?.[0]?.value?.price;
+      const vixVal  = macroRes.value?.[1]?.value?.price;
+      const macroCtx = `SPY: ${spyVal ? '$' + spyVal.toFixed(2) : 'N/A'}, VIX: ${vixVal ? vixVal.toFixed(1) : 'N/A'}`;
+      const sentCtx  = sentLabel ? `AV Sentiment: ${sentLabel} (score ${avgSentScore})` : '';
+
+      // Stocktwits social sentiment
+      const socialSnap = stores.socialSentiment.all().filter(e => e.ticker === ticker).slice(-1)[0];
+      const socialCtx = socialSnap ? `Stocktwits: ${Math.round(socialSnap.bull_pct * 100)}% bull / ${Math.round(socialSnap.bear_pct * 100)}% bear (${socialSnap.total} msgs)` : '';
+
+      // EDGAR recent filings (last 30 days) for Why context
+      const since30 = new Date(Date.now() - 30 * 86400000).toISOString();
+      const recentFilings = stores.edgarFilings.all().filter(e => e.ticker === ticker && (e.filed_at || '') >= since30).slice(-3);
+      const filingCtx = recentFilings.length ? `SEC Filings: ${recentFilings.map(f => `${f.type} ${String(f.filed_at).slice(0,10)} ${f.title}`).join(' | ')}` : '';
+
+      const sources = mergedNews.slice(0, 8).map(n => ({
+        headline: n.headline, url: n.url, source: n.source,
+        sentiment: n.sentiment || null, published_at: n.created_at,
+      }));
+
+      let explanation;
+      if (OPENROUTER_API_KEY) {
+        try {
+          const systemP = `You are a senior macro analyst. Write a concise causal explanation (3-5 sentences, max 140 words) for the price move. Cite headlines and sentiment data directly. End with one key risk. Plain text, no markdown headers.`;
+          const userP   = `Ticker: ${ticker}\nPrice: $${price} (${pctChange} today)\nMacro: ${macroCtx}\n${sentCtx ? sentCtx + '\n' : ''}${socialCtx ? socialCtx + '\n' : ''}${filingCtx ? filingCtx + '\n' : ''}\nNews last 24h:\n${articles || 'No news found.'}\n\nExplain the move and its causes.`;
+          explanation = await callLLM(systemP, userP);
+        } catch { explanation = null; }
+      }
+      if (!explanation) {
+        const dir = pctChange !== 'N/A' ? (parseFloat(pctChange) >= 0 ? '▲' : '▼') : '─';
+        explanation = [
+          `${ticker} ${dir} ${pctChange} | $${price} | ${macroCtx}${sentCtx ? ' | ' + sentCtx : ''}`,
+          mergedNews.length ? 'Top stories (last 24h):' : 'No news found in last 24h.',
+          ...sources.slice(0, 5).map(s => `• ${s.headline}`),
+        ].join('\n');
+      }
+
+      const note = stores.whyNotes.append({ ticker, price, pct_change: pctChange, explanation, sources, sentiment_score: avgSentScore, sentiment_label: sentLabel, ts: new Date().toISOString() });
+
+      const date = new Date().toISOString().slice(0, 10);
+      const vaultDir = path.join(VAULT_ROOT, 'trading', 'whys');
+      fs.mkdirSync(vaultDir, { recursive: true });
+      const vaultFile = path.join(vaultDir, `${date}-${ticker}.md`);
+      fs.writeFileSync(vaultFile, [
+        `---\nticker: ${ticker}\ndate: ${date}\ngenerated: true\nsentiment: ${sentLabel || 'N/A'}\nscore: ${avgSentScore || 'N/A'}\ntags: [why, ${ticker.toLowerCase()}]\n---`,
+        `# Why [[trading/${ticker}]] moved ${pctChange} on ${date}`,
+        `\n${explanation}\n`,
+        `## Sources`,
+        sources.map(s => `- [${s.headline}](${s.url || '#'}) — _${s.source}_${s.sentiment ? ' · ' + s.sentiment : ''}`).join('\n'),
+        `\n[[_daily/${date}]] [[trading/${ticker}]]`,
+      ].join('\n'));
+
+      ensureTickerPage(ticker, { lastPrice: price, lastWhy: explanation }).catch(() => {});
+      return sendJson(res, 200, { ticker, price, pct_change: pctChange, explanation, sources, sentiment_score: avgSentScore, sentiment_label: sentLabel, vault_file: vaultFile });
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+
+  if (method === 'GET' && pathname === '/api/trading/whys') {
+    return sendJson(res, 200, stores.whyNotes.all().slice(-50).reverse());
+  }
+
+  // ── Vault API ────────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/vault/browse') {
+    const dirParam = url.searchParams.get('dir') || '';
+    const target = path.resolve(VAULT_ROOT, dirParam);
+    if (!target.startsWith(VAULT_ROOT)) return sendJson(res, 403, { error: 'forbidden' });
+    function buildTree(dir, rel = '') {
+      const entries = [];
+      try {
+        for (const name of fs.readdirSync(dir).sort()) {
+          if (name.startsWith('.')) continue;
+          const full = path.join(dir, name);
+          const relPath = rel ? `${rel}/${name}` : name;
+          const stat = fs.statSync(full);
+          if (stat.isDirectory()) {
+            entries.push({ name, path: relPath, type: 'dir', children: buildTree(full, relPath) });
+          } else if (name.endsWith('.md')) {
+            entries.push({ name, path: relPath, type: 'file', size: stat.size, mtime: stat.mtimeMs });
+          }
+        }
+      } catch {}
+      return entries;
+    }
+    return sendJson(res, 200, buildTree(target));
+  }
+
+  if (method === 'GET' && pathname === '/api/vault/file') {
+    const relPath = url.searchParams.get('path') || '';
+    if (!relPath) return sendJson(res, 400, { error: 'path required' });
+    const target = path.resolve(VAULT_ROOT, relPath);
+    if (!target.startsWith(VAULT_ROOT)) return sendJson(res, 403, { error: 'forbidden' });
+    try {
+      const content = fs.readFileSync(target, 'utf8');
+      const backlinks = [...content.matchAll(/\[\[([^\]]+)\]\]/g)].map(m => m[1]);
+      return sendJson(res, 200, { path: relPath, content, backlinks: [...new Set(backlinks)] });
+    } catch(e) { return sendJson(res, 404, { error: 'not found' }); }
+  }
+
+  if (method === 'GET' && pathname === '/api/vault/search') {
+    const q = (url.searchParams.get('q') || '').trim();
+    if (!q) return sendJson(res, 400, { error: 'q required' });
+    const safeTerm = q.replace(/[^a-zA-Z0-9 _\-\.]/g, '').slice(0, 80);
+    if (!safeTerm) return sendJson(res, 400, { error: 'invalid query' });
+    try {
+      const results = await new Promise((resolve, reject) => {
+        execFile('grep', ['-ril', '--include=*.md', safeTerm, VAULT_ROOT], { timeout: 5000 }, (err, stdout) => {
+          if (err && err.code !== 1) return reject(err);
+          const files = (stdout || '').trim().split('\n').filter(Boolean).map(f => ({
+            path: path.relative(VAULT_ROOT, f),
+            name: path.basename(f),
+          }));
+          resolve(files);
+        });
+      });
+      return sendJson(res, 200, results.slice(0, 50));
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+
+  // ── News Feed ────────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/news') {
+    const ticker = url.searchParams.get('ticker')?.toUpperCase();
+    const limit  = Math.min(parseInt(url.searchParams.get('limit') || '30'), 200);
+    let rows = stores.newsEvents.all().slice().reverse();
+    if (ticker) rows = rows.filter(r => r.ticker === ticker || r.tickers?.includes(ticker));
+    return sendJson(res, 200, rows.slice(0, limit));
+  }
+
+  if (method === 'GET' && pathname.startsWith('/api/trading/sentiment/')) {
+    const ticker = pathname.split('/').pop().toUpperCase();
+    return sendJson(res, 200, stores.socialSentiment.all().filter(e => e.ticker === ticker).slice(-1)[0] || {});
+  }
+
+  if (method === 'GET' && pathname === '/api/trading/filings') {
+    const ticker = url.searchParams.get('ticker') ? url.searchParams.get('ticker').toUpperCase() : null;
+    const type   = url.searchParams.get('type') || null;
+    let items = stores.edgarFilings.all();
+    if (ticker) items = items.filter(e => e.ticker === ticker);
+    if (type)   items = items.filter(e => e.type === type);
+    const limit  = Math.min(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 100);
+    return sendJson(res, 200, items.sort((a, b) => new Date(b.filed_at) - new Date(a.filed_at)).slice(0, limit));
+  }
+
+  if (method === 'POST' && pathname === '/api/news/ingest') {
+    if (!scheduler) return sendJson(res, 503, { error: 'scheduler not active' });
+    scheduler.ingestNow().catch(() => {});
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // POST /api/trading/pipeline/run — trigger full 4-agent pipeline
+  if (method === 'POST' && pathname === '/api/trading/pipeline/run') {
+    if (!requireAuth(req, res)) return;
+    const context = {
+      watchlist:    stores.watchlist ? stores.watchlist.all().map(w => w.ticker || w.symbol).filter(Boolean) : [],
+      macroSummary: '',
+    };
+    tradingPipeline.runPipeline(context).catch(e => console.error('[pipeline] error:', e.message));
+    return sendJson(res, 202, { ok: true, message: 'Pipeline started' });
+  }
+
+  // GET /api/trading/pipeline/results — last N results
+  if (method === 'GET' && pathname === '/api/trading/pipeline/results') {
+    if (!requireAuth(req, res)) return;
+    const limit = parseInt(url.searchParams.get('limit') || '5', 10);
+    const results = stores.pipelineResults.all().slice(-limit);
+    return sendJson(res, 200, results);
+  }
+
+  if (method === 'GET' && pathname === '/api/trading/features') {
+    const ticker = url.searchParams.get('ticker');
+    const limit  = Math.min(parseInt(url.searchParams.get('limit') || '100'), 500);
+    let rows = stores.featureVectors.all();
+    if (ticker) rows = rows.filter(r => r.ticker === ticker.toUpperCase());
+    return sendJson(res, 200, rows.slice(-limit).reverse());
+  }
+
+  // ── Forecast routes ──────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/trading/forecasts') {
+    const status = url.searchParams.get('status'); // pending | approved | dismissed
+    const limit  = Math.min(parseInt(url.searchParams.get('limit') || '50'), 200);
+    let rows = stores.forecasts.all();
+    // Return only the latest forecast run (by ts) unless ?all=1
+    if (!url.searchParams.get('all')) {
+      const latestTs = rows.reduce((max, r) => r.ts > max ? r.ts : max, '');
+      if (latestTs) rows = rows.filter(r => r.ts === latestTs);
+    }
+    if (status) rows = rows.filter(r => r.status === status);
+    return sendJson(res, 200, rows.slice(0, limit));
+  }
+
+  if (method === 'POST' && pathname === '/api/trading/forecasts/run') {
+    if (!scheduler) return sendJson(res, 503, { error: 'scheduler not running' });
+    scheduler.forecastNow().catch(() => {});
+    return sendJson(res, 202, { ok: true, message: 'forecast cycle triggered' });
+  }
+
+  if (method === 'PATCH' && pathname.startsWith('/api/trading/forecasts/')) {
+    const id = decodeURIComponent(pathname.split('/').pop());
+    try {
+      const body = JSON.parse(await readBody(req));
+      const updated = stores.forecasts.patch(id, body);
+      if (!updated) return sendJson(res, 404, { error: 'not found' });
+      // If approved → promote to signal
+      if (body.status === 'approved') {
+        stores.signals.append({
+          ticker:     updated.ticker,
+          direction:  updated.direction,
+          confidence: updated.confidence,
+          score:      updated.score,
+          rationale:  updated.rationale,
+          source:     'forecast',
+          forecast_id: updated.id,
+          status:     'watching',
+          ts:         new Date().toISOString(),
+        });
+        broadcast('signal-approved', { ticker: updated.ticker, direction: updated.direction, score: updated.score });
+      }
+      return sendJson(res, 200, updated);
+    } catch(e) { return sendJson(res, 400, { error: e.message }); }
+  }
+
+  if (pathname === '/api/trading/watchlist') {
+    if (method === 'GET') return sendJson(res, 200, stores.watchlist.all());
+    if (method === 'POST') {
+      try { return sendJson(res, 200, stores.watchlist.append(JSON.parse(await readBody(req)))); }
+      catch(e) { return sendJson(res, 400, { error: e.message }); }
+    }
+  }
+  if (method === 'DELETE' && pathname.startsWith('/api/trading/watchlist/')) {
+    return sendJson(res, 200, { ok: stores.watchlist.remove(pathname.split('/').pop()) });
+  }
+
+  if (pathname === '/api/trading/signals') {
+    if (method === 'GET') {
+      let items = stores.signals.all();
+      const status = url.searchParams.get('status');
+      if (status) items = items.filter(s => s.status === status);
+      return sendJson(res, 200, items.reverse());
+    }
+    if (method === 'POST') {
+      try { return sendJson(res, 200, stores.signals.append(JSON.parse(await readBody(req)))); }
+      catch(e) { return sendJson(res, 400, { error: e.message }); }
+    }
+  }
+  if (method === 'PATCH' && pathname.startsWith('/api/trading/signals/')) {
+    const id = pathname.split('/').pop();
+    try {
+      const updates = JSON.parse(await readBody(req));
+      const r = stores.signals.patch(id, updates);
+      if (r && updates.status === 'approved') {
+        notifyDiscord(`🚦 Signal Approved: ${r.direction?.toUpperCase()} ${r.ticker} — Entry $${r.entry_price} | Target $${r.target_price} | R/R ${r.rr_ratio}x`);
+        broadcast('system-event', { type: 'signal-approved', signal: r });
+      }
+      return sendJson(res, r ? 200 : 404, r || { error: 'not found' });
+    } catch(e) { return sendJson(res, 400, { error: e.message }); }
+  }
+
+  if (pathname === '/api/trading/journal') {
+    if (method === 'GET') return sendJson(res, 200, stores.journal.all().reverse());
+    if (method === 'POST') {
+      try {
+        const entry = JSON.parse(await readBody(req));
+        if (entry.entry_price && entry.exit_price) {
+          const dir = String(entry.direction).toLowerCase() === 'short' ? -1 : 1;
+          entry.result_pct = (((entry.exit_price - entry.entry_price) / entry.entry_price) * 100 * dir).toFixed(2);
+        }
+        return sendJson(res, 200, stores.journal.append(entry));
+      } catch(e) { return sendJson(res, 400, { error: e.message }); }
+    }
+  }
+  if (method === 'PATCH' && pathname.startsWith('/api/trading/journal/')) {
+    const id = pathname.split('/').pop();
+    try { const r = stores.journal.patch(id, JSON.parse(await readBody(req))); return sendJson(res, r ? 200 : 404, r || { error: 'not found' }); }
+    catch(e) { return sendJson(res, 400, { error: e.message }); }
+  }
+
+  if (method === 'GET' && pathname === '/api/trading/vault-journal') {
+    return sendJson(res, 200, await listVaultJournalFiles());
+  }
+
+  if (pathname === '/api/trading/positions') {
+    if (method === 'GET') return sendJson(res, 200, stores.positions.all());
+    if (method === 'POST') {
+      try { return sendJson(res, 200, stores.positions.append(JSON.parse(await readBody(req)))); }
+      catch(e) { return sendJson(res, 400, { error: e.message }); }
+    }
+  }
+  if (method === 'PATCH' && pathname.startsWith('/api/trading/positions/')) {
+    const id = pathname.split('/').pop();
+    try { const r = stores.positions.patch(id, JSON.parse(await readBody(req))); return sendJson(res, r ? 200 : 404, r || { error: 'not found' }); }
+    catch(e) { return sendJson(res, 400, { error: e.message }); }
+  }
+
+  if (pathname === '/api/trading/alerts') {
+    if (method === 'GET') return sendJson(res, 200, stores.priceAlerts.all());
+    if (method === 'POST') {
+      try { return sendJson(res, 200, stores.priceAlerts.append(JSON.parse(await readBody(req)))); }
+      catch(e) { return sendJson(res, 400, { error: e.message }); }
+    }
+  }
+  if (method === 'DELETE' && pathname.startsWith('/api/trading/alerts/')) {
+    return sendJson(res, 200, { ok: stores.priceAlerts.remove(pathname.split('/').pop()) });
+  }
+
+  if (method === 'POST' && pathname.startsWith('/api/trading/research/')) {
+    const ticker = decodeURIComponent(pathname.split('/').pop());
+    const body   = await readBody(req).then(b => { try { return JSON.parse(b); } catch { return {}; } });
+    const context = body.context || '';
+    const prompt = context
+      ? `Trade Review for ${ticker}:\n${context}\n\nReview this trade critically. What worked, what didn't, and what should I do differently? Extract 2-3 concrete lessons.`
+      : `Build a full investment thesis for ${ticker}. Include: (1) bull case with catalysts and price targets, (2) bear case with key risks, (3) comparable companies table with P/E, EV/EBITDA, (4) recommended entry/stop/target levels, (5) macro context. Be specific and quantitative.`;
+    try {
+      const reply = await runAgent('main', prompt);
+      const dir = path.join(DATA_DIR, 'theses');
+      fs.mkdirSync(dir, { recursive: true });
+      const filename = `${ticker}-${new Date().toISOString().slice(0,10)}.md`;
+      fs.writeFileSync(path.join(dir, filename), `# ${ticker} Thesis — ${new Date().toLocaleDateString()}\n\n${reply}`);
+      return sendJson(res, 200, { reply, file: `/theses/${filename}` });
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+
+  if (pathname === '/api/trading/settings') {
+    if (method === 'GET') return sendJson(res, 200, readJsonFile(TR_SETTINGS_FILE));
+    if (method === 'POST') {
+      try {
+        const incoming = JSON.parse(await readBody(req));
+        const existing = readJsonFile(TR_SETTINGS_FILE);
+        writeJsonFile(TR_SETTINGS_FILE, { ...existing, ...incoming });
+        return sendJson(res, 200, { ok: true });
+      }
+      catch(e) { return sendJson(res, 400, { error: e.message }); }
+    }
+  }
+
+  // ── Alpaca Broker ─────────────────────────────────────────────
+  if (pathname.startsWith('/api/trading/broker')) {
+    if (!alpaca) return sendJson(res, 503, { error: 'Alpaca keys not configured' });
+    try {
+      // GET /api/trading/broker/account
+      if (method === 'GET' && pathname === '/api/trading/broker/account') {
+        const [account, positions, orders, clock] = await Promise.all([
+          alpaca.getAccount(), alpaca.getPositions(), alpaca.getOrders('open', 20), alpaca.getClock()
+        ]);
+        return sendJson(res, 200, { account, positions, orders, clock, paper: alpaca.isPaper });
+      }
+      // GET /api/trading/broker/positions
+      if (method === 'GET' && pathname === '/api/trading/broker/positions') {
+        return sendJson(res, 200, await alpaca.getPositions());
+      }
+      // DELETE /api/trading/broker/positions  (close all)
+      if (method === 'DELETE' && pathname === '/api/trading/broker/positions') {
+        const { cancel } = JSON.parse(await readBody(req).catch(() => '{}'));
+        return sendJson(res, 200, await alpaca.closeAll(cancel));
+      }
+      // DELETE /api/trading/broker/positions/:symbol
+      if (method === 'DELETE' && pathname.startsWith('/api/trading/broker/positions/')) {
+        const symbol = pathname.split('/').pop();
+        return sendJson(res, 200, await alpaca.closePosition(symbol));
+      }
+      // GET /api/trading/broker/orders
+      if (method === 'GET' && pathname === '/api/trading/broker/orders') {
+        const status = url.searchParams.get('status') || 'open';
+        const limit  = Number(url.searchParams.get('limit') || 50);
+        return sendJson(res, 200, await alpaca.getOrders(status, limit));
+      }
+      // POST /api/trading/broker/orders  — place order
+      if (method === 'POST' && pathname === '/api/trading/broker/orders') {
+        const body = JSON.parse(await readBody(req));
+        const { symbol, qty, side, type, tif, limit_price, stop_price,
+                take_profit, stop_loss, stop_loss_limit, trail_percent,
+                bracket, entry, confirm_pin } = body;
+        if (!symbol || !qty || !side) return sendJson(res, 400, { error: 'symbol, qty, side required' });
+        // PIN gate: required for live orders or paper orders >= TRADE_PIN_THRESHOLD
+        if (TRADE_PIN) {
+          const notional = body.notional || (Number(qty) * Number(limit_price || stop_price || 0));
+          const needsPin = !ALPACA_PAPER || notional >= TRADE_PIN_THRESHOLD;
+          if (needsPin && confirm_pin !== TRADE_PIN) {
+            return sendJson(res, 403, { error: 'PIN required to place this order', pin_required: true });
+          }
+        }
+        const result = bracket
+          ? await alpaca.bracketOrder(symbol, qty, side, entry || null, take_profit, stop_loss, tif)
+          : await alpaca.placeOrder(symbol, qty, side, { type, tif, limit_price, stop_price, take_profit, stop_loss, stop_loss_limit, trail_percent });
+        notifyDiscord(`📈 Order placed (${alpaca.isPaper ? 'PAPER' : 'LIVE'}): ${side.toUpperCase()} ${qty}x ${symbol.toUpperCase()} [${type || 'market'}]`);
+        broadcast('system-event', { type: 'order-placed', order: result });
+        // Auto-journal vault entry for fills
+        if (result.status === 'filled') {
+          writeTradeJournal({
+            symbol:      result.symbol,
+            side:        result.side,
+            qty:         result.filled_qty || result.qty,
+            avg_price:   result.filled_avg_price || result.limit_price || '?',
+            total_value: (Number(result.filled_qty || result.qty) * Number(result.filled_avg_price || 0)),
+            order_id:    result.id,
+            filled_at:   result.filled_at,
+          }).catch(e => {
+            console.error('[journal] writeTradeJournal failed:', e.message);
+            broadcast('system-event', { type: 'journal-error', error: e.message });
+          });
+          ensureTickerPage(result.symbol).catch(e => {
+            console.error('[journal] ensureTickerPage failed:', e.message);
+          });
+        }
+        return sendJson(res, 200, result);
+      }
+      // DELETE /api/trading/broker/orders/:id
+      if (method === 'DELETE' && pathname.startsWith('/api/trading/broker/orders/')) {
+        const id = pathname.split('/').pop();
+        if (id === 'all') return sendJson(res, 200, await alpaca.cancelAll());
+        return sendJson(res, 200, await alpaca.cancelOrder(id));
+      }
+      // GET /api/trading/broker/clock
+      if (method === 'GET' && pathname === '/api/trading/broker/clock') {
+        return sendJson(res, 200, await alpaca.getClock());
+      }
+      // GET /api/trading/broker/snapshot?symbol=AAPL
+      if (method === 'GET' && pathname === '/api/trading/broker/snapshot') {
+        const symbol = url.searchParams.get('symbol');
+        const symbols = url.searchParams.get('symbols');
+        if (symbols) return sendJson(res, 200, await alpaca.getSnapshots(symbols.split(',').map(s => s.trim())));
+        if (!symbol)  return sendJson(res, 400, { error: 'symbol or symbols required' });
+        return sendJson(res, 200, await alpaca.getSnapshot(symbol));
+      }
+      // GET /api/trading/broker/bars?symbol=AAPL&timeframe=1Day&limit=50
+      if (method === 'GET' && pathname === '/api/trading/broker/bars') {
+        const symbol = url.searchParams.get('symbol');
+        if (!symbol) return sendJson(res, 400, { error: 'symbol required' });
+        const tf    = url.searchParams.get('timeframe') || '1Day';
+        const limit = Number(url.searchParams.get('limit') || 100);
+        return sendJson(res, 200, await alpaca.getBars(symbol, tf, limit));
+      }
+      // GET /api/trading/broker/portfolio
+      if (method === 'GET' && pathname === '/api/trading/broker/portfolio') {
+        const period = url.searchParams.get('period') || '1M';
+        const tf     = url.searchParams.get('timeframe') || '1D';
+        return sendJson(res, 200, await alpaca.getPortfolio(period, tf));
+      }
+    } catch(e) {
+      return sendJson(res, e.status || 500, { error: e.message, detail: e.body || null });
+    }
+  }
+
+  // ── Trading Automation ───────────────────────────────────────
+  if (pathname.startsWith('/api/trading/auto')) {
+    if (!scheduler) return sendJson(res, 503, { error: 'Trading engine not configured' });
+    try {
+      // GET /api/trading/auto/status
+      if (method === 'GET' && pathname === '/api/trading/auto/status') {
+        return sendJson(res, 200, scheduler.status());
+      }
+      // POST /api/trading/auto/scan  — trigger immediate scan
+      if (method === 'POST' && pathname === '/api/trading/auto/scan') {
+        const scanBody = await readBody(req).then(b => { try { return JSON.parse(b); } catch { return {}; } });
+        const force = scanBody && scanBody.force === true;
+        scheduler.scanNow(force).catch(() => {});
+        return sendJson(res, 200, { ok: true, message: force ? 'forced scan triggered' : 'scan triggered' });
+      }
+      // POST /api/trading/auto/sync  — force account sync
+      if (method === 'POST' && pathname === '/api/trading/auto/sync') {
+        await scheduler.syncNow();
+        return sendJson(res, 200, { ok: true, status: scheduler.status() });
+      }
+      // GET /api/trading/auto/risk
+      if (method === 'GET' && pathname === '/api/trading/auto/risk') {
+        return sendJson(res, 200, riskGov.status());
+      }
+      // POST /api/trading/auto/risk  — update risk config
+      if (method === 'POST' && pathname === '/api/trading/auto/risk') {
+        const cfg = JSON.parse(await readBody(req));
+        riskGov.configure(cfg);
+        return sendJson(res, 200, riskGov.status());
+      }
+      // POST /api/trading/auto/risk/reset — reset daily circuit breaker
+      if (method === 'POST' && pathname === '/api/trading/auto/risk/reset') {
+        riskGov.resetDailyBreaker();
+        return sendJson(res, 200, { ok: true, status: riskGov.status() });
+      }
+    } catch(e) {
+      return sendJson(res, 500, { error: e.message });
+    }
+  }
+
+  // ── Factory ───────────────────────────────────────────────────
+  if (pathname === '/api/factory/proposals') {
+    if (method === 'GET') return sendJson(res, 200, stores.factoryProps.all().reverse());
+    if (method === 'POST') {
+      try { return sendJson(res, 200, stores.factoryProps.append(JSON.parse(await readBody(req)))); }
+      catch(e) { return sendJson(res, 400, { error: e.message }); }
+    }
+  }
+  if (method === 'PATCH' && pathname.startsWith('/api/factory/proposals/') && !pathname.endsWith('/build')) {
+    const id = pathname.split('/').slice(-1)[0];
+    try { const r = stores.factoryProps.patch(id, JSON.parse(await readBody(req))); return sendJson(res, r ? 200 : 404, r || { error: 'not found' }); }
+    catch(e) { return sendJson(res, 400, { error: e.message }); }
+  }
+  if (method === 'POST' && pathname.endsWith('/build')) {
+    const id = pathname.split('/').slice(-2)[0];
+    const prop = stores.factoryProps.all().find(p => p.id === id);
+    if (!prop) return sendJson(res, 404, { error: 'proposal not found' });
+    stores.factoryProps.patch(id, { status: 'building' });
+    broadcast('system-event', { type: 'factory-build-started', proposal: prop });
+    const prompt = `Build a production-ready MVP for this product proposal:\n\nTitle: ${prop.title}\nProblem: ${prop.problem}\nSolution: ${prop.solution}\n\nCreate a GitHub repo, implement the core features, deploy to Vercel. Report the GitHub URL and Vercel preview URL when done.`;
+    runAgent('dev', prompt)
+      .then(reply => {
+        const ghMatch = reply.match(/github\.com\/[\w-]+\/[\w-]+/);
+        const vercelMatch = reply.match(/[\w-]+\.vercel\.app/);
+        stores.factoryProps.patch(id, { status: 'review', github_repo: ghMatch?.[0] || null, vercel_url: vercelMatch?.[0] || null, build_output: reply.slice(0,500) });
+        broadcast('system-event', { type: 'factory-build-done', id });
+      })
+      .catch(e => stores.factoryProps.patch(id, { status: 'proposal', build_error: e.message }));
+    return sendJson(res, 200, { ok: true, message: 'Build started' });
+  }
+
+  // ── Email Inbox ───────────────────────────────────────────────
+  if (pathname === '/api/email/inbox') {
+    if (method === 'GET') {
+      let items = stores.emailInbox.all().reverse();
+      const status = url.searchParams.get('status');
+      const priority = url.searchParams.get('priority');
+      if (status) items = items.filter(e => e.status === status);
+      if (priority) items = items.filter(e => e.priority === priority);
+      return sendJson(res, 200, items);
+    }
+    if (method === 'POST') {
+      try { return sendJson(res, 200, stores.emailInbox.append(JSON.parse(await readBody(req)))); }
+      catch(e) { return sendJson(res, 400, { error: e.message }); }
+    }
+  }
+  if (method === 'PATCH' && pathname.startsWith('/api/email/inbox/') && !pathname.includes('/reply') && !pathname.includes('/escalate')) {
+    const id = pathname.split('/').pop();
+    try { const r = stores.emailInbox.patch(id, JSON.parse(await readBody(req))); return sendJson(res, r ? 200 : 404, r || { error: 'not found' }); }
+    catch(e) { return sendJson(res, 400, { error: e.message }); }
+  }
+  if (method === 'POST' && pathname.match(/\/api\/email\/inbox\/[^/]+\/(reply-positive|reply-negative|escalate)$/)) {
+    const parts = pathname.split('/');
+    const action = parts.pop();
+    const id = parts.pop();
+    const email = stores.emailInbox.all().find(e => e.id === id);
+    if (!email) return sendJson(res, 404, { error: 'not found' });
+    const sentiment = action === 'reply-positive' ? 'positive and helpful' : action === 'reply-negative' ? 'politely declining' : 'detailed and thorough';
+    const prompt = action === 'escalate'
+      ? `I need your help with this email:\n\nFrom: ${email.from}\nSubject: ${email.subject}\nSummary: ${email.summary}\nAction items: ${JSON.stringify(email.action_items)}\n\nPlease provide a thorough, strategic response or action plan.`
+      : `Draft a ${sentiment} email reply to:\n\nFrom: ${email.from}\nSubject: ${email.subject}\nContent summary: ${email.summary}\n\nWrite only the reply body, professional tone, concise.`;
+    try {
+      const reply = await runAgent('main', prompt);
+      stores.emailInbox.patch(id, { draft_reply: reply, status: 'draft_ready' });
+      return sendJson(res, 200, { reply });
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+
+  // ── Costs ─────────────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/costs') {
+    const days = parseInt(url.searchParams.get('days') || '14', 10);
+    const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+    const agentsFile = path.join(DATA_DIR, 'agents.json');
+    const agents = getAgentConfig();
+    // Read from Supabase via a simple fetch from the frontend; server just returns model pricing table
+    // Server can't hit Supabase directly without service key, so return pricing table + instructions
+    return sendJson(res, 200, { model_prices: MODEL_PRICES, avg_tokens: AVG_TOKENS, agents: agents.map(a => a.id), days, cutoff });
+  }
+  if (method === 'GET' && pathname === '/api/costs/suggestions') {
+    return sendJson(res, 200, [
+      { rule: 'Use Haiku for routine summarization tasks — saves ~70% vs Sonnet', saving_pct: 70 },
+      { rule: 'Batch research tasks to reduce parallel Opus calls', saving_pct: 30 },
+      { rule: 'Cache repeated web searches in agent memory files', saving_pct: 20 },
+      { rule: 'Use local Ollama/Gemma for privacy-sensitive email triage', saving_pct: 100 },
+    ]);
+  }
+
+  // ── Morning Brief ─────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/brief/today') {
+    const briefs = stores.dailyBrief.all();
+    const today = new Date().toDateString();
+    const brief = briefs.reverse().find(b => new Date(b.created_at).toDateString() === today);
+    return sendJson(res, 200, brief || null);
+  }
+  if (method === 'POST' && pathname === '/api/brief/generate') {
+    try {
+      const brief = await generateDailyBrief();
+      return sendJson(res, 200, brief);
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+
+  if (method === 'GET' && pathname === '/api/brief/weekly') {
+    return sendJson(res, 200, stores.weeklyBrief.all().slice(-4));
+  }
+  if (method === 'POST' && pathname === '/api/brief/weekly/generate') {
+    try {
+      const brief = await generateWeeklyReview();
+      return sendJson(res, 200, brief);
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+
+  // ── GitHub proxy ─────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/github/prs') {
+    if (!GITHUB_TOKEN || !GITHUB_REPO) return sendJson(res, 200, { error: 'not configured' });
+    try {
+      const data = await new Promise((resolve, reject) => {
+        const req2 = https.request({
+          hostname: 'api.github.com',
+          path: `/repos/${GITHUB_REPO}/pulls?state=open&per_page=20`,
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}`, 'User-Agent': 'atlas-dashboard/1.0', 'Accept': 'application/vnd.github+json' },
+        }, (r2) => {
+          let raw = '';
+          r2.on('data', c => raw += c);
+          r2.on('end', () => { try { resolve(JSON.parse(raw)); } catch(e) { reject(e); } });
+        });
+        req2.on('error', reject);
+        req2.end();
+      });
+      const prs = Array.isArray(data) ? data.map(pr => ({
+        number: pr.number, title: pr.title, author: pr.user?.login,
+        state: pr.state, draft: pr.draft, url: pr.html_url,
+        created_at: pr.created_at, mergeable: pr.mergeable,
+        head: pr.head?.label, base: pr.base?.label,
+      })) : data;
+      return sendJson(res, 200, prs);
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+  if (method === 'POST' && pathname.startsWith('/api/github/prs/') && pathname.endsWith('/merge')) {
+    if (!GITHUB_TOKEN || !GITHUB_REPO) return sendJson(res, 503, { error: 'not configured' });
+    const prNum = pathname.split('/')[4];
+    if (!prNum || isNaN(Number(prNum))) return sendJson(res, 400, { error: 'invalid PR number' });
+    try {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const result = await new Promise((resolve, reject) => {
+        const payload = JSON.stringify({ merge_method: body.merge_method || 'squash', commit_title: body.commit_title });
+        const req2 = https.request({
+          hostname: 'api.github.com',
+          path: `/repos/${GITHUB_REPO}/pulls/${prNum}/merge`,
+          method: 'PUT',
+          headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}`, 'User-Agent': 'atlas-dashboard/1.0', 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+        }, (r2) => {
+          let raw = '';
+          r2.on('data', c => raw += c);
+          r2.on('end', () => { try { resolve({ status: r2.statusCode, body: JSON.parse(raw) }); } catch(e) { reject(e); } });
+        });
+        req2.on('error', reject);
+        req2.write(payload);
+        req2.end();
+      });
+      return sendJson(res, result.status >= 400 ? 422 : 200, result.body);
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+
+  // ── Standup ───────────────────────────────────────────────────
+  if (method === 'POST' && pathname === '/api/standup/generate') {
+    try {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const logs = body.logs || [];
+      const prompt = `Based on these recent agent activities:\n${logs.map(l=>`- ${l.agent_name}: ${l.task_description} (${l.status})`).join('\n')}\n\nWrite a brief standup summary (3-5 bullets) covering what was accomplished and what's next.`;
+      const reply = await runAgent('main', prompt);
+      const standup = stores.standups.append({ summary: reply, participants: [...new Set(logs.map(l=>l.agent_name))] });
+      return sendJson(res, 200, standup);
+    } catch(e) { return sendJson(res, 500, { error: e.message }); }
+  }
+  if (method === 'GET' && pathname === '/api/standup/latest') {
+    const all = stores.standups.all();
+    return sendJson(res, 200, all[all.length-1] || null);
+  }
+
+  // ── Unified Approvals ─────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/approvals') {
+    const signals  = stores.signals.all().filter(s => s.status === 'watching').map(s => ({ ...s, _type: 'signal',  _label: `${s.direction?.toUpperCase()} ${s.ticker}` }));
+    const ideas    = stores.contentIdeas.all().filter(i => i.status === 'idea').map(i => ({ ...i, _type: 'content', _label: i.title }));
+    const emails   = stores.emailInbox.all().filter(e => e.status === 'unread').map(e => ({ ...e, _type: 'email',   _label: e.subject || e.from }));
+    const proposals= stores.factoryProps.all().filter(p => p.status === 'proposal').map(p => ({ ...p, _type: 'factory', _label: p.title }));
+    const all = [...signals, ...ideas, ...emails, ...proposals].sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+    return sendJson(res, 200, all);
+  }
+
+  // ── Webhook Receiver ──────────────────────────────────────────
+  if (method === 'POST' && pathname.startsWith('/api/webhook/')) {
+    const source = pathname.split('/').pop();
+    if (WEBHOOK_SECRET) {
+      const sig = req.headers['x-webhook-secret'] || req.headers['x-hub-signature-256'] || '';
+      if (!sig.includes(WEBHOOK_SECRET)) return sendJson(res, 401, { error: 'invalid signature' });
+    }
+    try {
+      const payload = JSON.parse(await readBody(req));
+      const event = stores.webhookEvents.append({ source, payload });
+      broadcast('system-event', { type: 'webhook', source, event });
+      // Route to appropriate agent if factory/github deploy
+      if (source === 'vercel' && payload?.type === 'deployment') {
+        const deploymentUrl = payload?.deployment?.url;
+        if (deploymentUrl) {
+          const id = payload?.deployment?.meta?.factoryId;
+          if (id) stores.factoryProps.patch(id, { status: 'deployed', vercel_url: deploymentUrl });
+        }
+      }
+      return sendJson(res, 200, { ok: true });
+    } catch(e) { return sendJson(res, 400, { error: e.message }); }
+  }
+
+  // ── Settings ──────────────────────────────────────────────────
+  if (pathname === '/api/settings') {
+    if (method === 'GET') return sendJson(res, 200, readJsonFile(SETTINGS_FILE));
+    if (method === 'POST') {
+      try {
+        const incoming = JSON.parse(await readBody(req));
+        const existing = readJsonFile(SETTINGS_FILE);
+        writeJsonFile(SETTINGS_FILE, { ...existing, ...incoming });
+        return sendJson(res, 200, { ok: true });
+      }
+      catch(e) { return sendJson(res, 400, { error: e.message }); }
+    }
+  }
+
+  // ── Agent Logs (Supabase) ─────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/agent-logs') {
+    if (!requireAuth(req, res)) return;
+    if (!DASHBOARD_SUPABASE_URL || !DASHBOARD_SUPABASE_KEY) {
+      return sendJson(res, 503, { error: 'Supabase not configured' });
+    }
+    try {
+      const limit = Math.min(Number(url.searchParams.get('limit') || 50), 200);
+      const data = await fetchUrl(
+        `${DASHBOARD_SUPABASE_URL}/rest/v1/agent_logs?select=agent_name,task_description,model_used,status,created_at&order=created_at.desc&limit=${limit}`,
+        { 'apikey': DASHBOARD_SUPABASE_KEY, 'Authorization': `Bearer ${DASHBOARD_SUPABASE_KEY}` }
+      );
+      const logs = Array.isArray(data) ? data : [];
+      const grouped = {};
+      for (const log of logs) {
+        const name = log.agent_name || 'unknown';
+        if (!grouped[name]) grouped[name] = [];
+        grouped[name].push(log);
+      }
+      return sendJson(res, 200, { logs, grouped, count: logs.length });
+    } catch (e) {
+      return sendJson(res, 502, { error: e.message });
+    }
+  }
+
+  // ── Agent Stats (Supabase) ────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/agent-stats') {
+    if (!requireAuth(req, res)) return;
+    if (!DASHBOARD_SUPABASE_URL || !DASHBOARD_SUPABASE_KEY) {
+      return sendJson(res, 503, { error: 'Supabase not configured' });
+    }
+    try {
+      const data = await fetchUrl(
+        `${DASHBOARD_SUPABASE_URL}/rest/v1/agent_logs?select=agent_name,status,created_at&order=created_at.desc&limit=5000`,
+        { 'apikey': DASHBOARD_SUPABASE_KEY, 'Authorization': `Bearer ${DASHBOARD_SUPABASE_KEY}` }
+      );
+      const logs = Array.isArray(data) ? data : [];
+      const stats = {};
+      for (const log of logs) {
+        const name = log.agent_name || 'unknown';
+        if (!stats[name]) {
+          stats[name] = { agent_name: name, total: 0, completed: 0, failed: 0, last_active: null };
+        }
+        stats[name].total++;
+        if (log.status === 'completed') stats[name].completed++;
+        if (log.status === 'failed') stats[name].failed++;
+        if (log.created_at && (!stats[name].last_active || log.created_at > stats[name].last_active)) {
+          stats[name].last_active = log.created_at;
+        }
+      }
+      return sendJson(res, 200, { stats: Object.values(stats), count: logs.length });
+    } catch (e) {
+      return sendJson(res, 502, { error: e.message });
+    }
+  }
+
+  // ── Activity Heatmap (Supabase) ────────────────────────────────
+  if (method === 'GET' && pathname === '/api/activity-heatmap') {
+    if (!requireAuth(req, res)) return;
+    if (!DASHBOARD_SUPABASE_URL || !DASHBOARD_SUPABASE_KEY) {
+      return sendJson(res, 503, { error: 'Supabase not configured' });
+    }
+    try {
+      const since = new Date(Date.now() - 24 * 3600000).toISOString();
+      const data = await fetchUrl(
+        `${DASHBOARD_SUPABASE_URL}/rest/v1/agent_logs?select=agent_name,created_at&created_at=gte.${since}&order=created_at.asc&limit=5000`,
+        { 'apikey': DASHBOARD_SUPABASE_KEY, 'Authorization': `Bearer ${DASHBOARD_SUPABASE_KEY}` }
+      );
+      const logs = Array.isArray(data) ? data : [];
+      const agents = [...new Set(logs.map(l => l.agent_name).filter(Boolean))];
+      const hours = Array.from({length: 24}, (_, i) => i);
+      const heatmap = {};
+      for (const a of agents) heatmap[a] = {};
+      for (const h of hours) for (const a of agents) heatmap[a][h] = 0;
+      for (const log of logs) {
+        const h = new Date(log.created_at).getUTCHours();
+        if (heatmap[log.agent_name]) heatmap[log.agent_name][h]++;
+      }
+      return sendJson(res, 200, { agents, hours, data: heatmap });
+    } catch (e) {
+      return sendJson(res, 502, { error: e.message });
+    }
+  }
+
+  // ── 7-Day Activity Chart (Supabase) ───────────────────────────
+  if (method === 'GET' && pathname === '/api/activity-chart') {
+    if (!requireAuth(req, res)) return;
+    if (!DASHBOARD_SUPABASE_URL || !DASHBOARD_SUPABASE_KEY) {
+      return sendJson(res, 503, { error: 'Supabase not configured' });
+    }
+    try {
+      const since = new Date(Date.now() - 7 * 86400000).toISOString();
+      const data = await fetchUrl(
+        `${DASHBOARD_SUPABASE_URL}/rest/v1/agent_logs?select=status,created_at&created_at=gte.${since}&order=created_at.asc&limit=5000`,
+        { 'apikey': DASHBOARD_SUPABASE_KEY, 'Authorization': `Bearer ${DASHBOARD_SUPABASE_KEY}` }
+      );
+      const logs = Array.isArray(data) ? data : [];
+      const days = [];
+      const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(Date.now() - i * 86400000);
+        days.push({ key: d.toISOString().slice(0,10), label: dayNames[d.getUTCDay()], total: 0, completed: 0 });
+      }
+      for (const log of logs) {
+        const key = log.created_at.slice(0,10);
+        const day = days.find(d => d.key === key);
+        if (day) { day.total++; if (log.status === 'completed') day.completed++; }
+      }
+      return sendJson(res, 200, {
+        labels: days.map(d => d.label),
+        total: days.map(d => d.total),
+        completed: days.map(d => d.completed)
+      });
+    } catch (e) {
+      return sendJson(res, 502, { error: e.message });
+    }
+  }
+
+  // ── Models ────────────────────────────────────────────────────
+  if (method === 'GET' && pathname === '/api/models') {
+    try {
+      const openclawCfg = JSON.parse(fs.readFileSync(path.join(WORKSPACE_ROOT, '..', 'openclaw.json'), 'utf8'));
+      const agentsList = openclawCfg.agents?.list || [];
+      const defaults = openclawCfg.agents?.defaults || {};
+      const defaultModel = defaults.model?.primary || '';
+      const defaultFallbacks = defaults.model?.fallbacks || [];
+      const allDefinedModels = Object.keys(defaults.models || {});
+
+      const agents = agentsList.map(agent => {
+        const agentId = agent.id;
+        // Read agent-specific models.json from agentDir if available
+        let availableModels = [];
+        if (agent.agentDir) {
+          const agentModelsFile = path.join(agent.agentDir, 'models.json');
+          try {
+            if (fs.existsSync(agentModelsFile)) {
+              const agentModels = JSON.parse(fs.readFileSync(agentModelsFile, 'utf8'));
+              const providers = agentModels.providers || {};
+              for (const [provider, pCfg] of Object.entries(providers)) {
+                const models = pCfg.models || [];
+                for (const m of models) {
+                  availableModels.push({
+                    provider,
+                    model_id: m.id,
+                    full_id: m.id,
+                  });
+                }
+              }
+            }
+          } catch {}
+        }
+        // If no agentDir models, fall back to defaults.models keys
+        if (!availableModels.length) {
+          availableModels = allDefinedModels.map(m => {
+            const slash = m.indexOf('/');
+            return {
+              provider: slash >= 0 ? m.slice(0, slash) : m,
+              model_id: m,
+              full_id: m,
+            };
+          });
+        }
+        // Determine current model: agent override or default
+        const agentModel = agent.model || agent.modelOverride || '';
+        const currentModel = agentModel || defaultModel;
+        return {
+          id: agentId,
+          name: agent.identity?.name || agent.name || agentId,
+          current_model: currentModel,
+          available_models: availableModels,
+        };
+      });
+
+      return sendJson(res, 200, { agents });
+    } catch (e) {
+      return sendJson(res, 500, { error: e.message });
+    }
+  }
+
+  if (method === 'POST' && pathname === '/api/agent-model') {
+    if (!requireAuth(req, res)) return;
+    try {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const { agent_id, model_id, fallbacks } = body;
+      if (!agent_id) return sendJson(res, 400, { error: 'agent_id required' });
+
+      const openclawPath = path.join(WORKSPACE_ROOT, '..', 'openclaw.json');
+
+      // Rotate backup before write
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      const bakPath = `${openclawPath}.bak.${ts}`;
+      try { fs.copyFileSync(openclawPath, bakPath); } catch {}
+
+      const cfg = JSON.parse(fs.readFileSync(openclawPath, 'utf8'));
+      const agentsList = cfg.agents?.list || [];
+      const idx = agentsList.findIndex(a => a.id === agent_id);
+      if (idx === -1) return sendJson(res, 404, { error: 'agent not found' });
+
+      const agent = agentsList[idx];
+      const isDefault = !model_id || model_id === 'default' || model_id === '';
+
+      if (isDefault) {
+        // Remove override — agent falls back to defaults.model
+        delete agent.model;
+        delete agent.modelOverride;
+        delete agent.fallbacks;
+      } else {
+        agent.model = model_id;
+        if (fallbacks && Array.isArray(fallbacks) && fallbacks.length) {
+          agent.fallbacks = fallbacks;
+        } else {
+          delete agent.fallbacks;
+        }
+      }
+
+      agentsList[idx] = agent;
+      cfg.agents.list = agentsList;
+
+      // Atomic write
+      const tmpPath = `${openclawPath}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(cfg, null, 2) + '\n');
+      fs.renameSync(tmpPath, openclawPath);
+
+      return sendJson(res, 200, {
+        ok: true,
+        agent_id,
+        model: isDefault ? null : model_id,
+        fallbacks: isDefault ? null : (fallbacks || null),
+        is_default: isDefault,
+      });
+    } catch (e) {
+      return sendJson(res, 500, { error: e.message });
+    }
+  }
+
+  // ── Capture ──
+  if (pathname === '/api/capture') {
+    if (method === 'GET') return sendJson(res, 200, stores.captures.all().slice(-200).reverse());
+    if (method === 'POST') {
+      try {
+        const body = JSON.parse(await readBody(req));
+        const { text = '', source = 'dashboard', intent: overrideIntent = '' } = body;
+        const raw = String(text || '').trim();
+        if (!raw) return sendJson(res, 400, { error: 'text required' });
+        const classified = classifyIntent(raw);
+        const allowed = new Set(['idea', 'task', 'question', 'trade_thesis', 'project', 'clip', 'journal']);
+        const intent = allowed.has(overrideIntent) ? overrideIntent : classified;
+        const capture = stores.captures.append({ raw_text: raw, text: cleanCaptureText(raw), intent, source, status: 'captured' });
+        const route = routeCapture(capture, raw, intent);
+        stores.captures.patch(capture.id, { status: 'routed', route });
+        const routed = { ...capture, status: 'routed', route };
+        broadcast('capture', routed);
+        return sendJson(res, 201, routed);
+      } catch(e) { return sendJson(res, 400, { error: e.message }); }
+    }
+  }
+
+  sendJson(res, 404, { error: 'Not found' });
+}
+
+// ─── Daily Brief Generator (shared) ──────────────────────────
+async function generateDailyBrief() {
+  const agents  = getAgentConfig().map(a => a.name).join(', ');
+  const cronJobs = getCronJobs().slice(0, 5).map(j => j.job_name).join(', ');
+  const signals  = stores.signals.all().filter(s => s.status === 'watching').slice(0, 3)
+    .map(s => `${s.direction?.toUpperCase()} ${s.ticker}`).join(', ') || 'none';
+  const emails   = stores.emailInbox.all().filter(e => e.status === 'unread').length;
+  const topForecasts = stores.forecasts.all().slice(-20)
+    .sort((a, b) => Math.abs(b.score || 0) - Math.abs(a.score || 0)).slice(0, 3)
+    .map(f => `${f.direction?.toUpperCase()} ${f.ticker} (score ${f.score})`).join(', ') || 'none';
+  const prompt = `Generate a concise Morning Brief for my AI agent operating system.\n\nAgent crew: ${agents}\nScheduled jobs today: ${cronJobs}\nActive trading signals: ${signals}\nTop forecast signals: ${topForecasts}\nUnread emails: ${emails}\n\nFormat:\n• 1-sentence macro market summary\n• Top 3 priorities for today\n• Any alerts or risks to be aware of\n• Motivational closer (1 sentence)\n\nBe specific, actionable, and energising.`;
+  const reply = await runAgent('main', prompt);
+  const brief = stores.dailyBrief.append({ content: reply, generated_by: 'scheduled' });
+  broadcast('system-event', { type: 'brief-ready', brief });
+
+  // Write to vault _daily/<date>.md
+  const date = new Date().toISOString().slice(0, 10);
+  const dailyDir = path.join(VAULT_ROOT, '_daily');
+  fs.mkdirSync(dailyDir, { recursive: true });
+  fs.writeFileSync(path.join(dailyDir, `${date}.md`), [
+    `---\ndate: ${date}\ngenerated: true\ntags: [daily]\n---`,
+    `# Daily Brief — ${date}`,
+    `\n${reply}\n`,
+    `---\n_Generated by Atlas at ${new Date().toISOString()}_`,
+  ].join('\n'));
+
+  return brief;
+}
+
+// ─── Weekly Review Generator ─────────────────────────────────
+async function generateWeeklyReview() {
+  const now = new Date();
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() - now.getDay()); // Sunday
+  weekStart.setHours(0, 0, 0, 0);
+
+  // Collect this week's daily briefs from vault
+  const dailyDir = path.join(VAULT_ROOT, '_daily');
+  let dailyContent = '';
+  try {
+    for (const f of fs.readdirSync(dailyDir).sort()) {
+      if (!f.endsWith('.md')) continue;
+      const d = new Date(f.replace('.md', ''));
+      if (d >= weekStart) {
+        dailyContent += fs.readFileSync(path.join(dailyDir, f), 'utf8').slice(0, 600) + '\n\n';
+      }
+    }
+  } catch {}
+
+  // Collect this week's Why notes from vault
+  const whyDir = path.join(VAULT_ROOT, 'trading', 'whys');
+  let whyContent = '';
+  try {
+    for (const f of fs.readdirSync(whyDir).sort().slice(-5)) {
+      if (!f.endsWith('.md')) continue;
+      whyContent += fs.readFileSync(path.join(whyDir, f), 'utf8').slice(0, 400) + '\n\n';
+    }
+  } catch {}
+
+  // Collect recent captures
+  const captures = stores.captures.all().filter(c => new Date(c.created_at) >= weekStart)
+    .slice(-20).map(c => `• [${c.intent}] ${c.raw_text || c.text}`).join('\n');
+
+  // Recent fills / trades
+  const fills = stores.journal.all().filter(j => new Date(j.ts || j.created_at) >= weekStart)
+    .slice(-10).map(j => `• ${j.side?.toUpperCase()} ${j.qty}x ${j.symbol} @ ${j.fill_price || j.price}`).join('\n');
+
+  const weekNum = Math.ceil((now - new Date(now.getFullYear(), 0, 1)) / 604800000);
+  const weekLabel = `${now.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
+
+  const prompt = `Generate a weekly review for my AI agent operating system.\n\nWeek: ${weekLabel}\n\nDaily briefs this week:\n${dailyContent || 'None yet'}\n\nTrading Why notes:\n${whyContent || 'None'}\n\nCaptures this week:\n${captures || 'None'}\n\nTrade fills:\n${fills || 'None'}\n\nFormat the review as:\n## Week in Review — ${weekLabel}\n### What happened\n(3-5 bullet summary)\n### Trading\n(performance and key decisions)\n### Captures & Ideas\n(recurring themes)\n### Next week focus\n(2-3 priorities)\n\nBe specific, honest, and actionable.`;
+
+  const reply = await runAgent('main', prompt);
+  const weeklyDir = path.join(VAULT_ROOT, '_weekly');
+  fs.mkdirSync(weeklyDir, { recursive: true });
+  fs.writeFileSync(path.join(weeklyDir, `${weekLabel}.md`), [
+    `---\nweek: ${weekLabel}\ngenerated: true\ntags: [weekly]\n---`,
+    reply,
+    `\n---\n_Generated by Atlas at ${now.toISOString()}_`,
+  ].join('\n'));
+
+  const brief = stores.weeklyBrief.append({ week: weekLabel, content: reply, generated_at: now.toISOString() });
+  broadcast('system-event', { type: 'weekly-review-ready', week: weekLabel });
+  return brief;
+}
+
+// ─── Daily Brief Scheduler ───────────────────────────────────
+function scheduleDailyBrief() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setDate(now.getDate() + 1);
+  next.setHours(7, 0, 0, 0);
+  const delay = next - now;
+  setTimeout(async () => {
+    try { await generateDailyBrief(); } catch {}
+    scheduleDailyBrief();
+  }, delay);
+}
+
+// ─── Weekly Review Scheduler ─────────────────────────────────
+function scheduleWeeklyReview() {
+  const now = new Date();
+  const next = new Date(now);
+  const daysUntilSun = (7 - now.getDay()) % 7 || 7; // days until next Sunday (always ≥1)
+  next.setDate(now.getDate() + daysUntilSun);
+  next.setHours(20, 0, 0, 0);
+  const delay = next - now;
+  setTimeout(async () => {
+    try { await generateWeeklyReview(); } catch {}
+    scheduleWeeklyReview(); // reschedule next week
+  }, delay);
+}
+
+// ─── HTTP Server ─────────────────────────────────────────────
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
+  // /healthz — unauthenticated, for monitoring
+  if (url.pathname === '/healthz') return handleApi(req, res, url);
+
+  // SSE endpoint: browsers don't send Basic Auth with EventSource
+  if (url.pathname !== '/api/events' && !requireAuth(req, res)) return;
+
+  if (url.pathname.startsWith('/api/')) return handleApi(req, res, url);
+  // Favicon
+  if (url.pathname === '/favicon.ico') { res.writeHead(204); res.end(); return; }
+
+
+  // Static file serving
+  const safeName = path.normalize(decodeURIComponent(url.pathname)).replace(/^([/\\]*\.\.[/\\]*)+/, '');
+  let filePath = path.join(ROOT, safeName === '/' ? 'index.html' : safeName);
+  if (!filePath.startsWith(ROOT)) { res.writeHead(403); res.end('Forbidden'); return; }
+
+  fs.stat(filePath, (err, stat) => {
+    if (err || !stat.isFile()) filePath = path.join(ROOT, 'index.html');
+    fs.readFile(filePath, (readErr, data) => {
+      if (readErr) { res.writeHead(404); res.end('Not found'); return; }
+      const ext = path.extname(filePath).toLowerCase();
+      const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.ico': 'image/x-icon' }[ext] || 'application/octet-stream';
+      const etag = `"${stat.size.toString(16)}-${stat.mtimeMs.toString(16)}"`;
+      if (req.headers['if-none-match'] === etag) {
+        res.writeHead(304); res.end(); return;
+      }
+      gzipOrRaw(res, data, {
+        'Content-Type': mime,
+        'Cache-Control': filePath.endsWith('index.html') ? 'no-cache, must-revalidate' : 'public, max-age=3600',
+        'ETag': etag,
+      });
+    });
+  });
+});
+
+// ─── Price Alert Checker ─────────────────────────────────────
+function startPriceAlertChecker() {
+  setInterval(async () => {
+    const alerts = stores.priceAlerts.all().filter(a => !a.triggered);
+    if (!alerts.length) return;
+    const tickers = [...new Set(alerts.map(a => a.ticker))];
+    try {
+      const quotes = await Promise.allSettled(tickers.map(t => yahooQuote(t)));
+      const priceMap = {};
+      quotes.forEach((r, i) => { if (r.status === 'fulfilled') priceMap[tickers[i]] = r.value.price; });
+      alerts.forEach(alert => {
+        const price = priceMap[alert.ticker];
+        if (!price) return;
+        const triggered = (alert.condition === 'above' && price > alert.target) ||
+                          (alert.condition === 'below' && price < alert.target);
+        if (triggered) {
+          stores.priceAlerts.patch(alert.id, { triggered: true, triggered_at: new Date().toISOString(), triggered_price: price });
+          const msg = `🔔 Price Alert: ${alert.ticker} is ${alert.condition} $${alert.target} (now $${price.toFixed(2)})`;
+          broadcast('system-event', { type: 'price-alert', ticker: alert.ticker, price, target: alert.target, condition: alert.condition, message: msg });
+          notifyDiscord(msg);
+        }
+      });
+    } catch {}
+  }, 60000);
+}
+
+// ─── Port Pre-flight & Graceful Shutdown ─────────────────────
+function checkPortFree(port, host) {
+  return new Promise((resolve, reject) => {
+    const tester = net.createServer()
+      .once('error', err => {
+        if (err.code === 'EADDRINUSE') reject(new Error(`Port ${port} already in use. Free it with: fuser -k ${port}/tcp`));
+        else reject(err);
+      })
+      .once('listening', () => tester.close(resolve));
+    tester.listen(port, host);
+  });
+}
+
+let shuttingDown = false;
+function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`▒ ${signal} — graceful shutdown`);
+  if (scheduler) scheduler.stop?.();
+  CLI_SESSIONS.forEach(sess => { try { sess.proc?.kill('SIGTERM'); } catch {} });
+  CLI_SESSIONS.clear();
+  server.close(() => { console.log('▒ Server closed'); process.exit(0); });
+  setTimeout(() => { console.log('▒ Forced exit'); process.exit(1); }, 5000).unref();
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
+
+// ─── Start ───────────────────────────────────────────────────
+checkPortFree(PORT, HOST)
+  .then(() => {
+    server.listen(PORT, HOST, () => {
+      ensureStore();
+      fs.mkdirSync(path.join(DATA_DIR, 'theses'), { recursive: true });
+      startPriceAlertChecker();
+
+      // Boot trading engine
+      if (scheduler) {
+        scheduler.init({
+          broadcast,
+          appendSignal:     (sig) => stores.signals.append(sig),
+          notifyDiscord,
+          getWatchlist:     () => stores.watchlist.all(),
+          appendForecast:   (fc)  => stores.forecasts.append(fc),
+          getAllFeatures:   ()    => stores.featureVectors.all(),
+          appendNewsEvent:  (ev)  => stores.newsEvents.append(ev),
+          appendSocialSentiment: stores.socialSentiment.append,
+          appendEdgarFiling: (() => {
+            let _keys = null;
+            return (item) => {
+              if (!_keys) _keys = new Set(stores.edgarFilings.all().map(e => `${e.ticker}:${e.type}:${e.filed_at}`));
+              const k = `${item.ticker}:${item.type}:${item.filed_at}`;
+              if (_keys.has(k)) return;
+              _keys.add(k);
+              stores.edgarFilings.append(item);
+            };
+          })(),
+          generateBrief:    generateDailyBrief,
+          newsdataApiKey:   process.env.NEWSDATA_API_KEY || '',
+          avApiKey:         AV_API_KEY,
+        });
+        scheduler.setFeatureStore((vec) => stores.featureVectors.append(vec));
+        scheduler.start();
+        console.log(`▒ Trading engine: ACTIVE (paper=${ALPACA_PAPER})`);
+      }
+
+      tradingPipeline.init({
+        openrouterKey:        OPENROUTER_API_KEY,
+        broadcast,
+        appendPipelineResult: stores.pipelineResults.append,
+      });
+
+      scheduleDailyBrief();
+      scheduleWeeklyReview();
+
+      console.log(`▒ Agent OS Dashboard V2.4`);
+      console.log(`▒ Listening on http://${HOST}:${PORT}`);
+      console.log(`▒ Workspace: ${WORKSPACE_ROOT}`);
+      console.log(`▒ CLI sessions: ${MAX_CLI_SESSIONS} max`);
+      console.log(`▒ SSE events: enabled`);
+      console.log(`▒ File API: enabled`);
+    });
+  })
+  .catch(err => { console.error(`▒ STARTUP FAILED: ${err.message}`); process.exit(1); });

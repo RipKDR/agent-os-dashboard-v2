@@ -1,0 +1,132 @@
+[
+  {
+    "title": "test dispatch from API",
+    "description": "test dispatch from API",
+    "agent": "dev",
+    "status": "done",
+    "source": "dashboard",
+    "id": "mq5tx4mj",
+    "created_at": "2026-06-08T23:15:36.235Z",
+    "updated_at": "2026-06-09T00:58:36.354Z",
+    "result": "Task completed by Hermes dashboard worker"
+  },
+  {
+    "title": "test auth",
+    "description": "test auth",
+    "agent": "dev",
+    "status": "done",
+    "source": "dashboard",
+    "id": "mq5w5nsw",
+    "created_at": "2026-06-09T00:18:13.568Z",
+    "updated_at": "2026-06-09T00:58:48.015Z",
+    "result": "Task completed by Hermes dashboard worker"
+  },
+  {
+    "title": "test the dispatch by adding a needed feature for the Agent OS dashboard. \n",
+    "description": "test the dispatch by adding a needed feature for the Agent OS dashboard. \n",
+    "agent": "orchestrator",
+    "status": "done",
+    "source": "dashboard",
+    "id": "mq5w8auu",
+    "created_at": "2026-06-09T00:20:16.758Z",
+    "updated_at": "2026-06-09T00:58:04.689Z",
+    "result": "Task completed by Hermes dashboard worker"
+  },
+  {
+    "title": "test the dispatch pipeline end-to-end from dashboard",
+    "description": "test the dispatch pipeline end-to-end from dashboard",
+    "agent": "dev",
+    "status": "done",
+    "source": "dashboard",
+    "id": "mq5x98sx",
+    "created_at": "2026-06-09T00:49:00.369Z",
+    "updated_at": "2026-06-09T00:59:00.685Z",
+    "result": "Task completed by Hermes dashboard worker"
+  },
+  {
+    "title": "test\n",
+    "description": "test\n",
+    "agent": "dev",
+    "status": "done",
+    "source": "dashboard",
+    "id": "mq5xk5b0",
+    "created_at": "2026-06-09T00:57:29.052Z",
+    "updated_at": "2026-06-09T00:59:18.216Z",
+    "result": "Task completed by Hermes dashboard worker"
+  },
+  {
+    "title": "test ",
+    "description": "test ",
+    "agent": "sam",
+    "status": "done",
+    "source": "dashboard",
+    "id": "mq5xkbse",
+    "created_at": "2026-06-09T00:57:37.454Z",
+    "updated_at": "2026-06-09T00:59:18.266Z",
+    "result": "Task completed by Hermes dashboard worker"
+  },
+  {
+    "title": "test \n",
+    "description": "test \n",
+    "agent": "orchestrator",
+    "status": "done",
+    "source": "dashboard",
+    "id": "mq5xkfw9",
+    "created_at": "2026-06-09T00:57:42.777Z",
+    "updated_at": "2026-06-09T00:59:18.319Z",
+    "result": "Task completed by Hermes dashboard worker"
+  },
+  {
+    "title": "test ",
+    "description": "test ",
+    "agent": "orchestrator",
+    "status": "done",
+    "source": "dashboard",
+    "id": "mq5xlb6f",
+    "created_at": "2026-06-09T00:58:23.319Z",
+    "updated_at": "2026-06-09T00:59:18.369Z",
+    "result": "Task completed by Hermes dashboard worker"
+  },
+  {
+    "title": "dashboard dispatch API smoke test - no-op; mark done immediately",
+    "description": "dashboard dispatch API smoke test - no-op; mark done immediately",
+    "agent": "orchestrator",
+    "status": "done",
+    "source": "dashboard",
+    "id": "mq5xll56",
+    "created_at": "2026-06-09T00:58:36.234Z",
+    "result": "Dispatch API smoke test completed by Hermes dashboard worker",
+    "updated_at": "2026-06-09T00:58:36.339Z"
+  },
+  {
+    "title": "Review code",
+    "description": "Review code",
+    "agent": "dev",
+    "status": "done",
+    "source": "dashboard-stream",
+    "id": "mq6u63or",
+    "created_at": "2026-06-09T16:10:21.099Z",
+    "updated_at": "2026-06-09T16:12:10.224Z",
+    "result": "{\"runId\":\"fb96bd5d-acd4-4806-bb58-8bdc19428025\",\"status\":\"ok\",\"summary\":\"completed\",\"result\":{\"payloads\":[{\"text\":\"I need more details to review the code effectively. Could you specify:\\n\\n1. Which code/file would you like reviewed?\\n2. What specific aspects you want me to focus on (e.g., security, performance, readability)?\\n3. Any particular context or requirements for the review?\\n\\n<message action=\\\"send\\\" target=\\\"current\\\">\\nPlease provide more details about the code you'd like reviewed and what specific aspects you want me to focus on.\\n</message>\",\"mediaUrl\":null}],\"meta\":{\"durationMs\":43240,\"agentMeta\":{\"sessionId\":\"da711401-a6c8-4e83-ab7f-036c33dc115c\",\"sessionFile\":\"/home/admin/.openclaw/agents/dev/sessions/da711401-a6c8-4e83-ab7f-036c33dc115c.jsonl\",\"provider\":\"openrouter\",\"model\":\"openrouter/free\",\"contextTokens\":200000,\"agentHarnessId\":\"openclaw\",\"usage\":{\"input\":13109,\"output\":414,\"reasoningTokens\":411,\"total\":13523},\"lastCallUsage\":{\"input\":13109,\"output\":414,\"cacheRead\":0,\"cacheWrite\":0,\"reasoningTokens\":411,\"total\":13523},\"promptTokens\":13109,\"contextBudgetStatus\":{\"schemaVersion\":1,\"source\":\"pre-prompt-estimate\",\"updatedAt\":1781021433653,\"provider\":\"openrouter\",\"model\":\"openrouter/free\",\"route\":\"fits\",\"shouldCompact\":false,\"estimatedPromptTokens\":11388,\"contextTokenBudget\":200000,\"promptBudgetBeforeReserve\":180000,\"reserveTokens\":20000,\"effectiveReserveTokens\":20000,\"remainingPromptBudgetTokens\":168612,\"overflowTokens\":0,\"toolResultReducibleChars\":0,\"messageCount\":1,\"unwindowedMessageCount\":1,\"sessionId\":\"da711401-a6c8-4e83-ab7f-036c33dc115c\"},\"fallbackAttempts\":[{\"provider\":\"openrouter\",\"model\":\"openrouter/auto\",\"error\":\"402 Insufficient credits. Add more using https://openrouter.ai/settings/credits\",\"reason\":\"billing\",\"status\":402}]},\"aborted\":false,\"systemPromptReport\":{\"source\":\"run\",\"generatedAt\":1781021433563,\"sessionId\":\"da711401-a6c8-4e83-ab7f-036c33dc115c\",\"sessionKey\":\"agent:dev:main\",\"provider\":\"openrouter\",\"model\":\"openrouter/free\",\"workspaceDir\":\"/home/admin/.openclaw/workspace/dev\",\"bootstrapMaxChars\":20000,\"bootstrapTotalMaxChars\":60000,\"bootstrapTruncation\":{\"warningMode\":\"always\",\"warningShown\":false,\"truncatedFiles\":0,\"nearLimitFiles\":0,\"totalNearLimit\":false},\"sandbox\":{\"mode\":\"off\",\"sandboxed\":false},\"systemPrompt\":{\"chars\":37648,\"hash\":\"d1943563137f57eaeaf0e5978c53ed9fef64638750006d6dbb7d8443cb1525a2\",\"projectContextChars\":14609,\"nonProjectContextChars\":23039},\"injectedWorkspaceFiles\":[{\"name\":\"AGENTS.md\",\"path\":\"/home/admin/.openclaw/workspace/dev/AGENTS.md\",\"missing\":false,\"rawChars\":8714,\"injectedChars\":8714,\"truncated\":false},{\"name\":\"SOUL.md\",\"path\":\"/home/admin/.openclaw/workspace/dev/SOUL.md\",\"missing\":false,\"rawChars\":1797,\"injectedChars\":1797,\"truncated\":false},{\"name\":\"TOOLS.md\",\"path\":\"/home/admin/.openclaw/workspace/dev/TOOLS.md\",\"missing\":false,\"rawChars\":910,\"injectedChars\":910,\"truncated\":false},{\"name\":\"IDENTITY.md\",\"path\":\"/home/admin/.openclaw/workspace/dev/IDENTITY.md\",\"missing\":false,\"rawChars\":693,\"injectedChars\":693,\"truncated\":false},{\"name\":\"USER.md\",\"path\":\"/home/admin/.openclaw/workspace/dev/USER.md\",\"missing\":false,\"rawChars\":534,\"injectedChars\":534,\"truncated\":false},{\"name\":\"HEARTBEAT.md\",\"path\":\"/home/admin/.openclaw/workspace/dev/HEARTBEAT.md\",\"missing\":false,\"rawChars\":151,\"injectedChars\":151,\"truncated\":false},{\"name\":\"BOOTSTRAP.md\",\"path\":\"/home/admin/.openclaw/workspace/dev/BOOTSTRAP.md\",\"missing\":false,\"rawChars\":1510,\"injectedChars\":1510,\"truncated\":false}],\"skills\":{\"promptChars\":12529,\"hash\":\"cba10fe5d87ba6d2172f0228befa6face7a9bae77d7dc6e68ce8ce3891c8a877\",\"entries\":[{\"name\":\"alex\",\"blockChars\":116},{\"name\":\"analytics-growth-loop\",\"blockChars\":150},{\"name\":\"api-and-interface-design\",\"blockChars\":156},{\"name\":\"app-store-release-readiness\",\"blockChars\":162},{\"name\":\"brainstorming\",\"blockChars\":114},{\"name\":\"browser-automation\",\"blockChars\":133},{\"name\":\"browser-testing-with-devtools\",\"blockChars\":166},{\"name\":\"canvas\",\"blockChars\":130},{\"name\":\"ci-cd-and-automation\",\"blockChars\":148},{\"name\":\"code-review-and-quality\",\"blockChars\":154},{\"name\":\"code-simplification\",\"blockChars\":146},{\"name\":\"context-engineering\",\"blockChars\":146},{\"name\":\"debugging-and-error-recovery\",\"blockChars\":164},{\"name\":\"deprecation-and-migration\",\"blockChars\":158},{\"name\":\"dev\",\"blockChars\":114},{\"name\":\"diagram-maker\",\"blockChars\":144},{\"name\":\"discord\",\"blockChars\":132},{\"name\":\"dispatching-parallel-agents\",\"blockChars\":142},{\"name\":\"docs-current-check\",\"blockChars\":144},{\"name\":\"documentation-and-adrs\",\"blockChars\":152},{\"name\":\"doubt-driven-development\",\"blockChars\":156},{\"name\":\"executing-plans\",\"blockChars\":118},{\"name\":\"find-skills\",\"blockChars\":110},{\"name\":\"finishing-a-development-branch\",\"blockChars\":148},{\"name\":\"frontend-ui-engineering\",\"blockChars\":154},{\"name\":\"full_pipeline\",\"blockChars\":134},{\"name\":\"gh-issues\",\"blockChars\":136},{\"name\":\"git-workflow-and-versioning\",\"blockChars\":162},{\"name\":\"github\",\"blockChars\":130},{\"name\":\"healthcheck\",\"blockChars\":140},{\"name\":\"idea-refine\",\"blockChars\":130},{\"name\":\"incremental-implementation\",\"blockChars\":160},{\"name\":\"jordan\",\"blockChars\":120},{\"name\":\"maya\",\"blockChars\":116},{\"name\":\"meme-maker\",\"blockChars\":138},{\"name\":\"mobile-performance-review\",\"blockChars\":158},{\"name\":\"nextjs-vercel-production\",\"blockChars\":156},{\"name\":\"node-connect\",\"blockChars\":142},{\"name\":\"node-inspect-debugger\",\"blockChars\":160},{\"name\":\"performance-optimization\",\"blockChars\":156},{\"name\":\"planning-and-task-breakdown\",\"blockChars\":162},{\"name\":\"playwright-e2e-review\",\"blockChars\":150},{\"name\":\"product-discovery-prd\",\"blockChars\":150},{\"name\":\"python-debugpy\",\"blockChars\":146},{\"name\":\"receiving-code-review\",\"blockChars\":130},{\"name\":\"requesting-code-review\",\"blockChars\":132},{\"name\":\"sam\",\"blockChars\":114},{\"name\":\"security-and-hardening\",\"blockChars\":152},{\"name\":\"security-privacy-review\",\"blockChars\":154},{\"name\":\"session-logs\",\"blockChars\":142},{\"name\":\"shipping-and-launch\",\"blockChars\":146},{\"name\":\"skf-analyze-source\",\"blockChars\":124},{\"name\":\"skf-audit-skill\",\"blockChars\":118},{\"name\":\"skf-brief-skill\",\"blockChars\":118},{\"name\":\"skf-create-skill\",\"blockChars\":120},{\"name\":\"skf-create-stack-skill\",\"blockChars\":132},{\"name\":\"skf-drop-skill\",\"blockChars\":116},{\"name\":\"skf-export-skill\",\"blockChars\":120},{\"name\":\"skf-forger\",\"blockChars\":108},{\"name\":\"skf-quick-skill\",\"blockChars\":118},{\"name\":\"skf-refine-architecture\",\"blockChars\":134},{\"name\":\"skf-rename-skill\",\"blockChars\":120},{\"name\":\"skf-setup\",\"blockChars\":106},{\"name\":\"skf-test-skill\",\"blockChars\":116},{\"name\":\"skf-update-skill\",\"blockChars\":120},{\"name\":\"skf-verify-stack\",\"blockChars\":120},{\"name\":\"skill-creator\",\"blockChars\":144},{\"name\":\"source-driven-development\",\"blockChars\":158},{\"name\":\"spec-driven-development\",\"blockChars\":154},{\"name\":\"spike\",\"blockChars\":128},{\"name\":\"supabase-rls-architecture\",\"blockChars\":158},{\"name\":\"superpowers-subagent-driven-development\",\"blockChars\":154},{\"name\":\"systematic-debugging\",\"blockChars\":128},{\"name\":\"taskflow\",\"blockChars\":134},{\"name\":\"taskflow-inbox-triage\",\"blockChars\":160},{\"name\":\"test-driven-development\",\"blockChars\":134},{\"name\":\"tmux\",\"blockChars\":126},{\"name\":\"using-agent-skills\",\"blockChars\":144},{\"name\":\"using-git-worktrees\",\"blockChars\":126},{\"name\":\"using-superpowers\",\"blockChars\":122},{\"name\":\"ux-audit\",\"blockChars\":124},{\"name\":\"verification-before-completion\",\"blockChars\":148},{\"name\":\"video-frames\",\"blockChars\":142},{\"name\":\"weather\",\"blockChars\":132},{\"name\":\"writing-plans\",\"blockChars\":114},{\"name\":\"writing-skills\",\"blockChars\":116}]},\"tools\":{\"listChars\":0,\"schemaChars\":7235,\"entries\":[{\"name\":\"message\",\"summaryChars\":605,\"summaryHash\":\"c9064ba9ed2203fa81efbd9e5a696506feb02b406196e2df541e2cbde964991b\",\"schemaChars\":6274,\"schemaHash\":\"9e30e838856864665d505e94bedcec8e172a4cf8eba4383221528172ceff01f6\",\"propertiesCount\":109},{\"name\":\"sessions_list\",\"summaryChars\":135,\"summaryHash\":\"c7e411ae02e3adff5504aaee48f02d262a8abb9152558a3172aae289e3b05faf\",\"schemaChars\":435,\"schemaHash\":\"c29c6b82c36a2d95a88c8944f129929b2621ee2af6d17b2ab101d4d7e9633d89\",\"propertiesCount\":9},{\"name\":\"sessions_history\",\"summaryChars\":117,\"summaryHash\":\"f5d45b76f11a8ac63cc45d456fb6f675f0b1a2e191feb9671924cb5830058f03\",\"schemaChars\":162,\"schemaHash\":\"ac33b8af2252262afe479236046f5a04bc018f1fcf24d1a8bf32743f0e867598\",\"propertiesCount\":3},{\"name\":\"sessions_send\",\"summaryChars\":224,\"summaryHash\":\"56fd935fc97400f8c60b16ae58268660a2d84d8014a60abed515576c45a6f307\",\"schemaChars\":275,\"schemaHash\":\"f1fbaa412fe6b6aee102234c87c5aa140f39c9086f9bae6e1e9691309a602ffb\",\"propertiesCount\":5},{\"name\":\"session_status\",\"summaryChars\":278,\"summaryHash\":\"71177e543dc6235bad4b1a26761995681dcec27ab58dcb4f4f8a7fc9a7b2b5aa\",\"schemaChars\":89,\"schemaHash\":\"d2995f3d69d126e98ac93eec3c2a9fe5556925bd7979a8e4b6b5a2bf62d329dd\",\"propertiesCount\":2}]},\"currentTurn\":{\"promptChars\":102,\"runtimeContextChars\":0}},\"finalPromptText\":\"[Retry after the previous model attempt failed or timed out]\\n\\n[Tue 2026-06-09 18:10 GMT+2] Review code\",\"finalAssistantVisibleText\":\"I need more details to review the code effectively. Could you specify:\\n\\n1. Which code/file would you like reviewed?\\n2. What specific aspects you want me to focus on (e.g., security, performance, readability)?\\n3. Any particular context or requirements for the review?\\n\\n<message action=\\\"send\\\" target=\\\"current\\\">\\nPlease provide more details about the code you'd like reviewed and what specific aspects you want me to focus on.\\n</message>\",\"finalAssistantRawText\":\"I need more details to review the code effectively. Could you specify:\\n\\n1. Which code/file would you like reviewed?\\n2. What specific aspects you want me to focus on (e.g., security, performance, readability)?\\n3. Any particular context or requirements for the review?\\n\\n<message action=\\\"send\\\" target=\\\"current\\\">\\nPlease provide more details about the code you'd like reviewed and what specific aspects you want me to focus on.\\n</message>\",\"replayInvalid\":false,\"livenessState\":\"working\",\"stopReason\":\"stop\",\"executionTrace\":{\"winnerProvider\":\"openrouter\",\"winnerModel\":\"openrouter/free\",\"attempts\":[{\"provider\":\"openrouter\",\"model\":\"openrouter/free\",\"result\":\"success\",\"stage\":\"assistant\"}],\"fallbackUsed\":false,\"runner\":\"embedded\"},\"requestShaping\":{\"authMode\":\"auth-profile\",\"thinking\":\"off\"},\"completion\":{\"stopReason\":\"stop\",\"finishReason\":\"stop\"}}}}"
+  },
+  {
+    "title": "Implement feature",
+    "description": "Implement feature",
+    "agent": "dev",
+    "status": "pending",
+    "source": "dashboard",
+    "id": "mq6u7lfk",
+    "created_at": "2026-06-09T16:11:30.752Z"
+  },
+  {
+    "title": "Quick health check from dashboard test",
+    "description": "Quick health check from dashboard test",
+    "agent": "sam",
+    "status": "failed",
+    "source": "dashboard",
+    "id": "mq6un5tl",
+    "created_at": "2026-06-09T16:23:37.017Z",
+    "result": "",
+    "updated_at": "2026-06-09T16:24:07.820Z"
+  }
+]

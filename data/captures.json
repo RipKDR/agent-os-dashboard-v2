@@ -1,0 +1,18 @@
+[
+  {
+    "id": "1778940209992-gob8h",
+    "created_at": "2026-05-16T14:03:29.992Z",
+    "raw_text": "build a Why Engine for gold move today",
+    "intent": "task",
+    "source": "test",
+    "status": "captured"
+  },
+  {
+    "id": "1778940280124-n2thr",
+    "created_at": "2026-05-16T14:04:40.124Z",
+    "raw_text": "why did SPY drop 2% today",
+    "intent": "question",
+    "source": "test",
+    "status": "captured"
+  }
+]

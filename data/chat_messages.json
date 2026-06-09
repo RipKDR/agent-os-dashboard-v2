@@ -1,0 +1,85 @@
+[
+  {
+    "id": "1778491536781-yqp56ep",
+    "created_at": "2026-05-11T09:25:36.781Z",
+    "processed": true,
+    "agent_name": "claw",
+    "sender": "operator",
+    "body": "hi",
+    "direction": "outbound"
+  },
+  {
+    "id": "1778491551931-p1cbcqn",
+    "created_at": "2026-05-11T09:25:51.931Z",
+    "processed": true,
+    "agent_name": "claw",
+    "sender": "main",
+    "body": "Hi — I’m here.",
+    "direction": "inbound"
+  },
+  {
+    "id": "1779158568647-c90lgl3",
+    "created_at": "2026-05-19T02:42:48.647Z",
+    "agent_name": "alex",
+    "sender": "operator",
+    "body": "test",
+    "direction": "outbound"
+  },
+  {
+    "id": "1779158680541-4clbd5w",
+    "created_at": "2026-05-19T02:44:40.541Z",
+    "agent_name": "alex",
+    "sender": "alex",
+    "body": "Test received. Supabase log write succeeded with status `completed`.",
+    "direction": "inbound"
+  },
+  {
+    "id": "1779158709707-lakjv6m",
+    "created_at": "2026-05-19T02:45:09.707Z",
+    "agent_name": "main",
+    "sender": "operator",
+    "body": "hypothesis",
+    "direction": "outbound"
+  },
+  {
+    "id": "1779158789177-76bycup",
+    "created_at": "2026-05-19T02:46:29.177Z",
+    "agent_name": "main",
+    "sender": "main",
+    "body": "HEARTBEAT_OK",
+    "direction": "inbound"
+  },
+  {
+    "id": "1779159085028-j51tmn1",
+    "created_at": "2026-05-19T02:51:25.028Z",
+    "agent_name": "alex",
+    "sender": "operator",
+    "body": "Refine this idea into a feature specification:\n\ntest",
+    "direction": "outbound"
+  },
+  {
+    "id": "1779159146262-arz436w",
+    "created_at": "2026-05-19T02:52:26.262Z",
+    "agent_name": "alex",
+    "sender": "alex",
+    "body": "**Feature Specification: Test Check**\n\n**Executive Summary**  \nAssumption: “test” refers to a lightweight feature that lets a user run a quick check to confirm something is working. The feature should provide a clear pass/fail result, explain what was checked, and offer the next action when the test fails.\n\n**Core Problem**  \nUsers need a fast way to verify setup, configuration, or connectivity without guessing whether the system is working.\n\n**Target Users**  \nPrimary: users configuring a new workflow, integration, account, device, or automation.  \nSecondary: support/admin users diagnosing whether a reported issue is user error, configuration error, or system failure.\n\n**MVP Scope**  \n- A `Run Test` action available from the relevant setup or settings screen.\n- A visible test state: `idle`, `running`, `passed`, `failed`.\n- A short result summary after completion.\n- Failure details with one recommended next step.\n- Timestamp of the latest test result.\n- Basic event logging for product/debug visibility.\n\n**Acceptance Criteria**  \n- Given the user has not run a test, when they open the screen, then the UI shows a neutral `Run Test` action.\n- Given the user clicks `Run Test`, when the check starts, then the button enters a loading/disabled state.\n- Given the test succeeds, when the result returns, then the user sees a clear success state and completion timestamp.\n- Given the test fails, when the result returns, then the user sees a failure state, plain-language reason, and recommended fix.\n- Given the test service errors or times out, when no reliable result is available, then the UI shows a safe failure message without exposing internal secrets.\n\n**Analytics Events**  \n- `test_started`: user id, test type, source screen.\n- `test_completed`: test type, result, duration ms.\n- `test_failed`: test type, failure category, retry count.\n\n**Risks + Constraints**  \n- If failure messages are vague, the feature will not reduce support burden.\n- Do not expose credentials, tokens, internal API responses, or stack traces in the UI.\n- Rate-limit repeated test attempts if the check touches paid APIs or external services.\n\n**Product Handoff To Maya**  \nProduct one-liner: A simple test-check feature that confirms setup health and gives users actionable failure recovery.  \nMVP: `Run Test`, loading state, pass/fail result, timestamp, failure reason, retry path, analytics.  \nSuccess metric: fewer setup-related support tickets and higher completion rate for the setup flow.  \nRecommended next step: design the settings/setup screen state model and result component.",
+    "direction": "inbound"
+  },
+  {
+    "id": "1780010094004-jge9v96",
+    "created_at": "2026-05-28T23:14:54.004Z",
+    "agent_name": "main",
+    "sender": "operator",
+    "body": "hypothesis",
+    "direction": "outbound"
+  },
+  {
+    "id": "1780010129827-o2i25vw",
+    "created_at": "2026-05-28T23:15:29.827Z",
+    "agent_name": "main",
+    "sender": "system",
+    "body": "Failed: GatewayClientRequestError: FailoverError: ⚠️ API rate limit reached. Please try again later.",
+    "direction": "inbound",
+    "error": true
+  }
+]
